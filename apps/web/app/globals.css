@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #0a0a0a;
+  --color-muted: #f5f5f5;
+  --color-muted-foreground: #737373;
+  --color-border: #e5e5e5;
+  --color-primary: #ff3621;
+  --color-primary-foreground: #ffffff;
+  --color-card: #ffffff;
+  --color-card-foreground: #0a0a0a;
+  --color-role-platform: #1b6e8c;
+  --color-role-governance: #76579f;
+  --color-role-engineering: #2e6fc7;
+  --color-role-science: #1f8069;
+  --color-role-bi: #9a650b;
+  --color-role-business: #9f4867;
+  --color-role-security: #b94638;
+  --color-role-finops: #4e753b;
+  --color-role-hub: #0f4c5c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: #0a0a0a;
+    --color-foreground: #fafafa;
+    --color-muted: #1a1a1a;
+    --color-muted-foreground: #a3a3a3;
+    --color-border: #262626;
+    --color-card: #131313;
+    --color-card-foreground: #fafafa;
+    --color-role-platform: #59a9c4;
+    --color-role-governance: #b39bd4;
+    --color-role-engineering: #76a8ea;
+    --color-role-science: #53b89e;
+    --color-role-bi: #d4a03c;
+    --color-role-business: #d287a4;
+    --color-role-security: #e78375;
+    --color-role-finops: #8aba70;
+    --color-role-hub: #55adc1;
+  }
+}
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}

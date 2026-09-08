@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build outputs (manter frontend/dist para deploy)
+# frontend/dist/  <- NAO excluir
+
+# Dados locais (SQLite)
+data/
+simulations/output/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.databricks/
+.DS_Store

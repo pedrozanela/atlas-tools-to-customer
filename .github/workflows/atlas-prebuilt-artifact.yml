@@ -1,0 +1,71 @@
+name: Build Atlas prebuilt artifact
+
+on:
+  push:
+    branches:
+      - main
+      - refactor/notebook_deploy
+      - feat/genie_waf
+      - fix/forge-api-basepath
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional GitHub Release tag to publish atlas-prebuilt.zip"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-prebuilt-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.5"
+          cache: npm
+
+      - name: Pin npm
+        run: npm install -g npm@11.11.0
+
+      - name: Show tool versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci --registry=https://registry.npmjs.org/ --no-audit --no-fund
+
+      - name: Build standalone bundles
+        run: npm run prepare:deploy
+
+      - name: Generate Lakebase schema SQL
+        run: node scripts/generate-lakebase-schema-sql.mjs
+
+      - name: Package prebuilt deploy artifact
+        run: |
+          zip -r atlas-prebuilt.zip . \
+            -x ".git/*" "node_modules/*" "apps/*/node_modules/*" \
+               ".turbo/*" "apps/*/.turbo/*" "apps/*/.next/*"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: atlas-prebuilt
+          path: atlas-prebuilt.zip
+          if-no-files-found: error
+
+      - name: Publish release asset
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes "Atlas prebuilt deploy artifact"
+          gh release upload "$RELEASE_TAG" atlas-prebuilt.zip --clobber

@@ -1,0 +1,202 @@
+bundle:
+  name: atlas
+
+include:
+  - resources/*.yml
+
+# Runtime allowlist for `databricks bundle deploy`.
+#
+# `sync.include` is additive, so it cannot turn a repository-root App source
+# into an allowlist by itself. `sync.paths` is the authoritative base set:
+# only the entrypoint, supervisor, pre-built Next.js chunks, and Certifica's
+# FastAPI/SPA runtime are eligible for upload.
+sync:
+  paths:
+    - app.yaml
+    - package.json
+    - requirements.txt
+    - scripts/start-databricks-app.mjs
+    - apps/people/backend/requirements.txt
+    - apps/people/backend/app
+    - apps/people/backend/seed
+    - apps/people/backend/static
+    # MOMA (Maturity & Operating Model Assessment): FastAPI + SPA (Python),
+    # served under /moma by the supervisor. Same treatment as People's backend:
+    # ship the runtime source directly (no Next.js standalone tarball).
+    - apps/moma/backend/app.py
+    - apps/moma/backend/requirements.txt
+    - apps/moma/backend/server
+    - apps/moma/backend/frontend/dist
+
+  include:
+    # Pre-built standalone bundles as tarball CHUNKS. Two Workspace
+    # limitations to dodge:
+    #   1. `node_modules` directories are silently filtered → we pack to
+    #      `.tar.gz` (single file → unfiltered).
+    #   2. Per-file upload limit is 10 MiB → we `split -b 9m` each tarball
+    #      into chunks named standalone.tar.gz.part-aa, .ab, …
+    # The supervisor reassembles + extracts to /tmp at boot.
+    - apps/*/standalone.tar.gz.part-*
+
+  exclude:
+    - "**/__pycache__/**"
+    - "**/*.py[cod]"
+
+variables:
+  app_name:
+    description: "Name of the Databricks App that hosts the Atlas shell + inner modules."
+    default: "atlas"
+
+  app_description:
+    description: "Description shown on the Apps listing page."
+    default: "Atlas — Customer mapping suite for Databricks Field Engineering"
+
+  company_name:
+    description: "Customer / tenant name. Stamped on every TAP submission and shown in reports."
+    default: "Databricks"
+
+  company_industry:
+    description: "Customer industry. Used as a default in TAP and as a tag in audits."
+    default: "Technology"
+
+  lakebase_project_id:
+    description: "Lakebase Autoscale project ID (forge uses it for native-password connection)."
+    default: "databricks-atlas"
+
+  lakebase_branch_id:
+    description: "Lakebase branch ID shared by Atlas modules."
+    default: "production"
+
+  lakebase_endpoint_id:
+    description: "Lakebase read/write endpoint ID for the selected branch."
+    default: "primary"
+
+  lakebase_database_id:
+    description: "Lakebase database resource ID for the selected branch."
+    default: "databricks-postgres"
+
+  lakebase_database_name:
+    description: "PostgreSQL database name exposed by the Lakebase database resource."
+    default: "databricks_postgres"
+
+  lakebase_direct_host:
+    description: "Lakebase direct hostname for clients that require session-level PostgreSQL settings."
+    default: "ep-solitary-sunset-e597xuib.database.brazilsouth.azuredatabricks.net"
+
+  lakebase_pooler_host:
+    description: "Lakebase pooler hostname for the selected read/write endpoint."
+    default: "ep-solitary-sunset-e597xuib-pooler.database.brazilsouth.azuredatabricks.net"
+
+  forge_demo_mode_enabled:
+    description: "Enable the Forge synthetic demo-data generator on approved targets."
+    default: "false"
+
+  certifica_pg_schema:
+    description: "Dedicated Lakebase schema owned by the Certifica module."
+    default: "certifica"
+
+  certifica_llm_endpoint:
+    description: "Foundation Model API endpoint used to generate certification questions."
+    default: "databricks-claude-opus-4-8"
+
+  certifica_secret_scope:
+    description: "Workspace secret scope containing Certifica runtime credentials."
+    default: "atlas-app"
+
+  certifica_jwt_secret_key:
+    description: "Secret key containing the Certifica JWT signing secret."
+    default: "certifica-jwt-secret"
+
+  certifica_seed_admin_password_key:
+    description: "Secret key containing the initial Certifica demo-admin password."
+    default: "certifica-seed-admin-password"
+
+  certifica_sso_enabled:
+    description: "Enable same-origin Databricks SSO bootstrap for Certifica."
+    default: "false"
+
+  certifica_default_tenant_slug:
+    description: "Initial Certifica tenant slug created by the idempotent demo seed."
+    default: "databricks"
+
+  certifica_default_tenant_name:
+    description: "Display name for the initial People & Training tenant."
+    default: "Databricks"
+
+  certifica_default_tenant_color:
+    description: "Primary brand color for the initial People & Training tenant."
+    default: "#FF3621"
+
+  certifica_superadmin_emails:
+    description: "Comma-separated Certifica platform administrators."
+    default: ""
+
+  certifica_seed_on_startup:
+    description: "Run the idempotent Certifica schema and demo-content seed at startup."
+    default: "true"
+
+  warehouse_id:
+    description: "SQL warehouse ID the app SP can use for queries."
+    default: "622e7544924eb8c9"
+
+  uc_catalog:
+    description: "Unity Catalog catalog where TAP submissions are persisted."
+    default: "databricks_atlas"
+
+  uc_schema:
+    description: "UC schema under uc_catalog for TAP submissions."
+    default: "tap"
+
+  uc_table:
+    description: "UC table inside uc_catalog.uc_schema for TAP submissions."
+    default: "databricks_tap_tool_submissions"
+
+  moma_uc_catalog:
+    description: "UC catalog for the MOMA module (schema 'moma'). Empty falls back to uc_catalog."
+    default: ""
+
+targets:
+  adb-brazil:
+    default: true
+    mode: development
+    workspace:
+      profile: adb-brazil
+    variables:
+      app_name: "atlas-dev"
+      company_name: "Databricks Brazil"
+
+  adb-sa-latam:
+    mode: development
+    workspace:
+      profile: adb-sa-latam
+    variables:
+      app_name: "atlas"
+      company_name: "Aurora Mining LATAM"
+      company_industry: "Mining & Metals"
+      forge_demo_mode_enabled: "true"
+      certifica_sso_enabled: "true"
+      certifica_superadmin_emails: "rodrigo.oliveira@databricks.com"
+      # MOMA grava no catalogo oficial do Atlas (schema databricks_atlas.moma),
+      # o mesmo uc_catalog usado pelo TAP. Requer schema `moma` criado e grants
+      # (USE SCHEMA / CREATE TABLE / SELECT / MODIFY) ao SP do app oficial.
+      moma_uc_catalog: "databricks_atlas"
+
+  cosin-dev:
+    mode: development
+    workspace:
+      profile: atlas-azure
+    variables:
+      app_name: "atlas-cosin"
+      company_name: "Cosin (dev - MOMA)"
+      # People & Training: mesmo acesso do Atlas oficial (SSO same-origin), para
+      # o modulo abrir logado como em producao (apenas entrar/sair, sem operar).
+      certifica_sso_enabled: "true"
+      # MOMA usa catalogo UC proprio (rodrigo_cosin.moma), isolado do TAP
+      # (que segue em databricks_atlas.tap). Grants ao SP do app + ao grupo
+      # `users` (todos os usuarios do workspace, read/write) ja aplicados.
+      moma_uc_catalog: "rodrigo_cosin"
+      # Seguranca: o app de dev compartilha o Lakebase de producao. Desligamos as
+      # escritas automaticas de boot (seed do Certifica e demo do Forge) para que
+      # apenas o nosso modulo /moma (schema UC proprio) grave. Nao usar os demais modulos aqui.
+      forge_demo_mode_enabled: "false"
+      certifica_seed_on_startup: "false"

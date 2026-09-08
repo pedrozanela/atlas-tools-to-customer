@@ -1,0 +1,53 @@
+name: Lockfile integrity
+
+# Guards against re-committing Databricks-internal npm proxy URLs into the
+# lockfile (issue #6). Such URLs are unreachable for external contributors and
+# customers, breaking `npm install` / `npm ci`.
+
+on:
+  pull_request:
+    paths:
+      - package-lock.json
+      - package.json
+      - .npmrc
+      - .github/workflows/lockfile-check.yml
+  push:
+    branches: [main]
+    paths:
+      - package-lock.json
+      - package.json
+      - .npmrc
+      - .github/workflows/lockfile-check.yml
+
+jobs:
+  no-private-registry:
+    name: No private registry URLs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure no private npm proxy URLs in package-lock.json
+        run: |
+          if grep -q "npm-proxy.dev.databricks.com" package-lock.json; then
+            echo "::error file=package-lock.json::package-lock.json contains the Databricks-internal npm proxy URL (npm-proxy.dev.databricks.com). Re-resolve against the public registry (registry.npmjs.org) before merging."
+            exit 1
+          fi
+          echo "OK: package-lock.json contains no private registry URLs."
+
+  install-from-public-registry:
+    name: Clean install from public registry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # No npm cache on purpose: a cold cache forces a real network fetch
+          # from registry.npmjs.org, which is what actually proves the lockfile
+          # is installable for an external user (issue #6).
+      - name: npm ci from the public registry
+        # GitHub-hosted runners are outside the Databricks network, so this
+        # reproduces the external contributor / customer environment. `npm ci`
+        # installs the lockfile verbatim and verifies every tarball's integrity
+        # hash against content fetched from registry.npmjs.org — failing on a
+        # 404 (URL unreachable) or EINTEGRITY (content mismatch).
+        run: npm ci --registry=https://registry.npmjs.org/ --no-audit --no-fund

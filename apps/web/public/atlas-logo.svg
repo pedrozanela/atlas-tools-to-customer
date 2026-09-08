@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+  <defs>
+    <linearGradient id="atlasLava" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FF3621"/>
+      <stop offset="100%" stop-color="#EE5F4D"/>
+    </linearGradient>
+    <pattern id="atlasBricks" x="0" y="0" width="12" height="6" patternUnits="userSpaceOnUse">
+      <rect width="12" height="6" fill="url(#atlasLava)"/>
+      <line x1="0" y1="3" x2="12" y2="3" stroke="#FFFFFF" stroke-width="0.35" opacity="0.45"/>
+      <line x1="6" y1="0" x2="6" y2="3" stroke="#FFFFFF" stroke-width="0.35" opacity="0.45"/>
+      <line x1="0" y1="3" x2="0" y2="6" stroke="#FFFFFF" stroke-width="0.35" opacity="0.45"/>
+      <line x1="12" y1="3" x2="12" y2="6" stroke="#FFFFFF" stroke-width="0.35" opacity="0.45"/>
+    </pattern>
+    <clipPath id="atlasCircle"><circle cx="48" cy="48" r="44"/></clipPath>
+  </defs>
+  <circle cx="48" cy="48" r="44" fill="url(#atlasBricks)"/>
+  <g stroke="#FFFFFF" stroke-width="1.5" fill="none" opacity="0.55" clip-path="url(#atlasCircle)">
+    <ellipse cx="48" cy="48" rx="20" ry="44"/>
+    <ellipse cx="48" cy="48" rx="38" ry="44"/>
+    <line x1="4" y1="48" x2="92" y2="48"/>
+    <line x1="14" y1="22" x2="82" y2="22"/>
+    <line x1="14" y1="74" x2="82" y2="74"/>
+  </g>
+  <path fill-rule="evenodd" fill="#FFFFFF" d="M48 22 L71 72 L61.5 72 L56.5 60 L39.5 60 L34.5 72 L25 72 Z M42 54 L54 54 L48 39.5 Z"/>
+</svg>

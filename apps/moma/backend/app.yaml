@@ -1,0 +1,29 @@
+# Databricks App - Data Maturity Compass (Databricks)
+#
+# O app roda com FastAPI (backend) + frontend estatico (JS puro, sem build).
+# Persistencia:
+#   - Se um recurso de Database (Lakebase) for anexado ao app E a variavel
+#     ENDPOINT_NAME estiver definida, usa Postgres/Lakebase (recomendado p/ multiusuario).
+#   - Caso contrario, usa SQLite local (efemero no Apps; use apenas para demo de 1 instancia).
+#
+# Passos de deploy: ver docs/DEPLOY.md
+
+command:
+  - "python"
+  - "-m"
+  - "uvicorn"
+  - "app:app"
+  - "--host"
+  - "0.0.0.0"
+  - "--port"
+  - "8000"
+
+env:
+  # Persistencia no lakehouse (Unity Catalog / Delta) via SQL warehouse.
+  # As tabelas dm_assessments e dm_responses sao criadas no schema abaixo.
+  - name: UC_CATALOG
+    value: 'cosin_aws_serverless_catalog'
+  - name: UC_SCHEMA
+    value: 'data_maturity_compass'
+  - name: WAREHOUSE_ID
+    value: '0c2def7684630e5e'

@@ -1,0 +1,6 @@
+# Python runtime for the People / Certifica FastAPI service.
+# Databricks Apps installs root requirements.txt before starting app.yaml.
+-r apps/people/backend/requirements.txt
+
+# MOMA - Maturity & Operating Model Assessment (Python module)
+-r apps/moma/backend/requirements.txt

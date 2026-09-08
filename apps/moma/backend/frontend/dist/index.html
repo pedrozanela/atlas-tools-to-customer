@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base id="appbase" href="/">
+  <title>Maturity &amp; Operating Model Assessment (Databricks)</title>
+  <meta name="description" content="Assessment de maturidade de dados e modelo operacional, com Data Mesh como uma das lentes, no Databricks.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%23ff3621'/></svg>">
+  <link rel="stylesheet" href="styles.css?v=61">
+  <script>window.__BASE__ = "";</script>
+</head>
+<body>
+  <div class="topbar">
+    <!-- Barra de modulo do Atlas (padrao WAF/MAS): voltar | nome do modulo | idioma + tema -->
+    <div class="atlasbar">
+      <div class="atlasbar-inner">
+        <div class="atlasbar-left">
+          <a class="atlas-back" id="atlasBack" href="/" aria-label="Voltar ao Atlas" hidden>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+            <span>Atlas</span>
+          </a>
+          <span class="topstrip-sep" id="topstripSep" hidden></span>
+          <svg class="module-icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+          <span class="module-name">MOMA - Maturity &amp; Operating Model Assessment</span>
+        </div>
+        <div class="topstrip-right">
+          <!-- Idioma (padrao WAF: botao-icone + dropdown) -->
+          <div class="hmenu" id="langMenu">
+            <button class="icon-btn" id="langBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Idioma">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+            </button>
+            <div class="hmenu-pop" id="langPop" role="menu" hidden>
+              <button class="hmenu-item" data-lang="en" role="menuitem"><span class="hmi-label">English</span><span class="hmi-active"></span></button>
+              <button class="hmenu-item" data-lang="pt" role="menuitem"><span class="hmi-label">Português (Brasil)</span><span class="hmi-active"></span></button>
+              <button class="hmenu-item" data-lang="es" role="menuitem"><span class="hmi-label">Español</span><span class="hmi-active"></span></button>
+            </div>
+          </div>
+          <!-- Tema (padrao WAF: botao-icone + dropdown claro/escuro/sistema) -->
+          <div class="hmenu" id="themeMenu">
+            <button class="icon-btn" id="themeBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Tema">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+            </button>
+            <div class="hmenu-pop" id="themePop" role="menu" hidden>
+              <button class="hmenu-item" data-theme="light" role="menuitem"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg><span class="hmi-label" data-k="light"></span><span class="hmi-active"></span></button>
+              <button class="hmenu-item" data-theme="dark" role="menuitem"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><span class="hmi-label" data-k="dark"></span><span class="hmi-active"></span></button>
+              <button class="hmenu-item" data-theme="system" role="menuitem"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg><span class="hmi-label" data-k="system"></span><span class="hmi-active"></span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Barra da solucao: titulo + navegacao -->
+    <div class="navbar">
+      <div class="navbar-inner">
+        <div class="brand" onclick="location.hash='#/'">
+          <span class="brand-title">Maturity &amp; Operating Model Assessment</span>
+        </div>
+        <nav class="nav" id="nav"></nav>
+      </div>
+    </div>
+  </div>
+  <main id="app"><div class="container"><div class="loading"><div class="spinner"></div>Carregando...</div></div></main>
+  <script src="vendor/mermaid.min.js?v=2"></script>
+  <script src="app.js?v=71"></script>
+</body>
+</html>

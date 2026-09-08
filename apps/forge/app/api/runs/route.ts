@@ -1,0 +1,134 @@
+/**
+ * API: /api/runs
+ *
+ * POST -- create a new pipeline run
+ * GET  -- list all runs
+ */
+
+import { NextRequest, NextResponse } from "next/server";
+import { v4 as uuidv4 } from "uuid";
+import { apiLogger } from "@/lib/logger";
+import { safeErrorMessage } from "@/lib/error-utils";
+import { createRun, listRuns } from "@/lib/lakebase/runs";
+import { ensureMigrated } from "@/lib/lakebase/schema";
+import { safeParseBody, CreateRunSchema } from "@/lib/validation";
+import { requireUser, ForgeAuthError } from "@/lib/auth/route-user";
+import { listAccessibleIds } from "@/lib/lakebase/acl";
+import { logActivity } from "@/lib/lakebase/activity-log";
+import type {
+  PipelineRunConfig,
+  Operation,
+  BusinessPriority,
+  GenerationOption,
+  DiscoveryDepth,
+} from "@/lib/domain/types";
+import { DEFAULT_DEPTH_CONFIGS } from "@/lib/domain/types";
+
+export async function POST(request: NextRequest) {
+  const log = apiLogger("/api/runs", "POST");
+  try {
+    await ensureMigrated();
+
+    let user;
+    try {
+      user = await requireUser(request);
+    } catch (e) {
+      if (e instanceof ForgeAuthError) {
+        return NextResponse.json({ error: e.message }, { status: e.status });
+      }
+      throw e;
+    }
+
+    const parsed = await safeParseBody(request, CreateRunSchema);
+    if (!parsed.success) {
+      log.warn("Validation failed", { error: parsed.error, errorCategory: "validation_failed" });
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+
+    const body = parsed.data;
+    const runId = uuidv4();
+    const config: PipelineRunConfig = {
+      businessName: body.businessName,
+      ucMetadata: body.ucMetadata,
+      excludedScope: body.excludedScope ?? "",
+      exclusionPatterns: body.exclusionPatterns ?? "",
+      operation: (body.operation ?? "Discover Usecases") as Operation,
+      businessDomains: body.businessDomains ?? "",
+      businessPriorities: (body.businessPriorities ?? ["Increase Revenue"]) as BusinessPriority[],
+      strategicGoals: body.strategicGoals ?? "",
+      additionalContext: body.additionalContext ?? "",
+      customerMaturity: body.customerMaturity ?? "developing",
+      riskPosture: body.riskPosture ?? "balanced",
+      transformationHorizon: body.transformationHorizon ?? "half-year",
+      generationOptions: (body.generationOptions ?? ["SQL Code"]) as GenerationOption[],
+      generationPath: body.generationPath ?? "./forge_gen/",
+      languages: ["English"],
+      aiModel: body.aiModel,
+      sampleRowsPerTable: body.sampleRowsPerTable ?? 0,
+      industry: body.industry ?? "",
+      discoveryDepth: (body.discoveryDepth ?? "balanced") as DiscoveryDepth,
+      depthConfig:
+        body.depthConfig ??
+        DEFAULT_DEPTH_CONFIGS[(body.discoveryDepth ?? "balanced") as DiscoveryDepth],
+      estateScanEnabled: body.estateScanEnabled ?? false,
+      assetDiscoveryEnabled: body.assetDiscoveryEnabled ?? false,
+      fabricScanId: body.fabricScanId ?? null,
+      businessValueEnabled: body.businessValueEnabled ?? false,
+      outputLanguage: body.outputLanguage ?? "en",
+    };
+
+    await createRun(runId, config, user.email);
+
+    // Fire-and-forget activity log
+    logActivity("created_run", {
+      userId: user.email,
+      resourceId: runId,
+      metadata: { businessName: config.businessName },
+    });
+
+    return NextResponse.json({ runId }, { status: 201 });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    log.error("POST failed", { error: msg, errorCategory: "internal_error" });
+    return NextResponse.json({ error: safeErrorMessage(error) }, { status: 500 });
+  }
+}
+
+export async function GET(request: NextRequest) {
+  const log = apiLogger("/api/runs", "GET");
+  try {
+    let user;
+    try {
+      user = await requireUser(request);
+    } catch (e) {
+      if (e instanceof ForgeAuthError) {
+        return NextResponse.json({ error: e.message }, { status: e.status });
+      }
+      throw e;
+    }
+
+    const { searchParams } = new URL(request.url);
+    const limit = Math.min(Math.max(parseInt(searchParams.get("limit") ?? "50", 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(searchParams.get("offset") ?? "0", 10) || 0, 0);
+    const view = (searchParams.get("view") ?? "all") as "all" | "owned" | "shared";
+
+    await ensureMigrated();
+
+    const sharedIds = view === "owned" ? [] : await listAccessibleIds(user.email, "run");
+    const runs = await listRuns(limit, offset, user.email, view, sharedIds);
+
+    return NextResponse.json(
+      { runs },
+      {
+        headers: {
+          // Per-user content -- must NOT be cached on shared CDN.
+          "Cache-Control": "private, no-store",
+        },
+      },
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    log.error("GET failed", { error: msg, errorCategory: "internal_error" });
+    return NextResponse.json({ error: safeErrorMessage(error) }, { status: 500 });
+  }
+}

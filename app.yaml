@@ -1,0 +1,169 @@
+# Atlas Databricks App entrypoint. The platform runs `command` from the
+# bundled source root and exposes whichever port the process binds to
+# $DATABRICKS_APP_PORT.
+#
+# The Atlas shell (apps/web) binds to $DATABRICKS_APP_PORT; forge, waf, tap,
+# mas, and the People/Certifica API run on internal loopback ports
+# (3001/3002/3003/3004/3005). See scripts/start-databricks-app.mjs for
+# orchestration.
+#
+# TEMPLATE: $(var.*) placeholders are resolved by scripts/deploy.mjs
+# against the bundle variables declared in databricks.yml. The deploy
+# script backs up the template and writes a rendered version in its
+# place; the original is restored after `bundle deploy` completes (same
+# try/finally pattern used for package.json). To deploy at a new
+# customer, override the variables under the relevant target in
+# databricks.yml — no edit to app.yaml needed.
+command:
+  - "node"
+  - "scripts/start-databricks-app.mjs"
+
+env:
+  - name: ATLAS_APP_NAME
+    value: "${var.app_name}"
+  # User authorization is intentionally restricted to the WAF zone.
+  - name: WAF_DATABRICKS_AUTH_MODE
+    value: "obo"
+
+  # Shared identity injection — Databricks Apps proxy already sets
+  # x-forwarded-email; this is the local-dev fallback used when running the
+  # supervisor outside the proxy. Safe to keep in prod (proxy headers win).
+  - name: FORGE_LOCAL_USER_EMAIL
+    value: ""
+
+  # --- TAP --------------------------------------------------------------
+
+  # Server-stamped company identity on every UC submission.
+  - name: APP_COMPANY_NAME
+    value: "${var.company_name}"
+  - name: APP_COMPANY_INDUSTRY
+    value: "${var.company_industry}"
+
+  # Unity Catalog destination for TAP submissions.
+  - name: UC_CATALOG
+    value: "${var.uc_catalog}"
+  - name: UC_SCHEMA
+    value: "${var.uc_schema}"
+  - name: UC_TABLE
+    value: "${var.uc_table}"
+
+  # MOMA reads/writes its own UC catalog (schema "moma"), independent of the
+  # TAP destination above. Empty => the supervisor falls back to UC_CATALOG.
+  - name: MOMA_UC_CATALOG
+    value: "${var.moma_uc_catalog}"
+
+  # Real writes to UC. App SP must hold CAN USE on the warehouse +
+  # USE CATALOG / USE SCHEMA / CREATE TABLE / MODIFY on the UC schema.
+  # If a write 500s, flip back to "true" and check grants.
+  - name: APP_DEV_MOCK_DATABASE
+    value: "false"
+
+  # --- Databricks SQL warehouse (shared by tap + forge) -----------------
+
+  # App SP must hold CAN USE on this warehouse. Grant via:
+  #   GRANT USAGE ON WAREHOUSE `<id>` TO `<app-sp-id>`;
+  - name: DATABRICKS_WAREHOUSE_ID
+    value: "${var.warehouse_id}"
+  - name: DATABRICKS_WAREHOUSE_HTTP_PATH
+    value: "/sql/1.0/warehouses/${var.warehouse_id}"
+
+  # --- Forge -----------------------------------------------------------
+
+  # Forge auto-provisions its Lakebase Autoscale project on startup
+  # (see scripts/start-databricks-app.mjs → provisionForgeLakebase).
+  # Point at the existing Atlas Lakebase project so forge reuses it
+  # instead of trying to create a fresh `databricks-forge-<sp-id>`
+  # project (which 404s today).
+  - name: LAKEBASE_PROJECT_ID
+    value: "${var.lakebase_project_id}"
+
+  # Native Postgres login (project has enable_pg_native_login=true). Using
+  # the `atlas-admin` role lets forge skip the OAuth credential rotation
+  # dance and write to the `forge` schema directly. Password lives in a
+  # Databricks workspace secret (scope/key shown below) — never in git.
+  - name: LAKEBASE_AUTH_MODE
+    value: "native_password"
+  - name: LAKEBASE_NATIVE_USER
+    value: "atlas-admin"
+  - name: LAKEBASE_NATIVE_PASSWORD
+    valueFrom: lakebase-atlas-admin-password
+
+  # Endpoint metadata is either target-configured or discovered by the
+  # serverless notebook flow. Keep the direct and pooled hosts separate:
+  # Forge uses the pooler, while Certifica needs session-level PostgreSQL
+  # settings that require the direct endpoint.
+  - name: LAKEBASE_DIRECT_HOST
+    value: "${var.lakebase_direct_host}"
+  - name: LAKEBASE_POOLER_HOST
+    value: "${var.lakebase_pooler_host}"
+  - name: LAKEBASE_ENDPOINT_NAME
+    value: "projects/${var.lakebase_project_id}/branches/${var.lakebase_branch_id}/endpoints/${var.lakebase_endpoint_id}"
+  - name: LAKEBASE_DATABASE
+    value: "${var.lakebase_database_name}"
+
+  # Internal Field Engineering demo generator. Keep disabled by default and
+  # enable only on targets explicitly intended for demonstrations.
+  - name: FORGE_DEMO_MODE_ENABLED
+    value: "${var.forge_demo_mode_enabled}"
+
+  # --- People / Certifica ------------------------------------------------
+
+  # Certifica persists its multi-tenant training state in a dedicated
+  # schema inside the existing Atlas Lakebase project. The app-level
+  # `postgres` resource remains declared in resources/atlas.app.yml.
+  - name: CERTIFICA_MOCK_MODE
+    value: "false"
+  - name: CERTIFICA_PGHOST
+    value: "${var.lakebase_direct_host}"
+  - name: CERTIFICA_PGPORT
+    value: "5432"
+  - name: CERTIFICA_PGDATABASE
+    value: "${var.lakebase_database_name}"
+  - name: CERTIFICA_PGUSER
+    value: "atlas-admin"
+  - name: CERTIFICA_PGPASSWORD
+    valueFrom: lakebase-atlas-admin-password
+  - name: CERTIFICA_PGSSLMODE
+    value: "require"
+  - name: CERTIFICA_PGSCHEMA
+    value: "${var.certifica_pg_schema}"
+
+  # Same-origin Databricks SSO is enabled per target. JWT remains enabled
+  # as the application session token and travels in X-App-Auth, never in
+  # the Authorization header consumed by the Databricks proxy.
+  - name: CERTIFICA_DATABRICKS_SSO_ENABLED
+    value: "${var.certifica_sso_enabled}"
+  - name: ENABLE_JWT_AUTH
+    value: "true"
+  - name: AUTH_HEADER
+    value: "X-App-Auth"
+  - name: CERTIFICA_JWT_SECRET
+    valueFrom: certifica-jwt-secret
+  - name: JWT_EXPIRE_MINUTES
+    value: "720"
+
+  # Demo bootstrap is idempotent. Both the platform admin and the initial
+  # password are target/secret driven; no credential is committed here.
+  - name: DEFAULT_TENANT_SLUG
+    value: "${var.certifica_default_tenant_slug}"
+  - name: DEFAULT_TENANT_NAME
+    value: "${var.certifica_default_tenant_name}"
+  - name: DEFAULT_TENANT_COLOR
+    value: "${var.certifica_default_tenant_color}"
+  - name: SUPERADMIN_EMAILS
+    value: "${var.certifica_superadmin_emails}"
+  - name: CERTIFICA_SEED_ADMIN_PASSWORD
+    valueFrom: certifica-seed-admin-password
+  - name: SEED_ON_STARTUP
+    value: "${var.certifica_seed_on_startup}"
+  - name: ALLOW_SELF_REGISTER
+    value: "true"
+  - name: PASS_MARK
+    value: "70"
+
+  # The endpoint resource injects its configured name and grants CAN_QUERY
+  # to the Atlas app service principal during deployment.
+  - name: LLM_ENDPOINT
+    valueFrom: certifica-llm-endpoint
+  - name: SERVING_ENDPOINT_NAME
+    valueFrom: certifica-llm-endpoint

@@ -1,0 +1,141 @@
+/**
+ * API: /api/runs/[runId]/dashboard-engine/generate
+ *
+ * POST -- Run/re-run the Dashboard Engine.
+ *         Runs asynchronously; the client polls /generate/status for progress.
+ */
+
+import { NextRequest, NextResponse } from "next/server";
+import { loadRunOrRespond } from "@/lib/auth/route-guards";
+import { safeErrorMessage } from "@/lib/error-utils";
+import { isValidUUID } from "@/lib/validation";
+import { getUseCasesByRunId } from "@/lib/lakebase/usecases";
+import { loadMetadataForRun } from "@/lib/lakebase/metadata-cache";
+import { getGenieRecommendationsByRunId } from "@/lib/lakebase/genie-recommendations";
+import { saveDashboardRecommendations } from "@/lib/lakebase/dashboard-recommendations";
+import { runDashboardEngine } from "@/lib/dashboard/engine";
+import { getDiscoveryResultsByRunId } from "@/lib/lakebase/discovered-assets";
+import {
+  startDashboardJob,
+  updateDashboardJob,
+  completeDashboardJob,
+  failDashboardJob,
+  getDashboardJobStatus,
+} from "@/lib/dashboard/engine-status";
+import { logger } from "@/lib/logger";
+
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ runId: string }> },
+) {
+  try {
+    const { runId } = await params;
+    if (!isValidUUID(runId)) {
+      return NextResponse.json({ error: "Invalid run ID" }, { status: 400 });
+    }
+
+    let domains: string[] | undefined;
+    try {
+      const body = await request.json();
+      if (Array.isArray(body?.domains) && body.domains.length > 0) {
+        domains = body.domains.filter((d: unknown) => typeof d === "string" && d.length > 0);
+        if (domains!.length === 0) domains = undefined;
+      }
+    } catch {
+      // No body or invalid JSON -- regenerate all domains
+    }
+
+    const guard = await loadRunOrRespond(request, runId, "edit");
+    if (!guard.ok) return guard.response;
+    const run = guard.value.run;
+    if (run.status !== "completed") {
+      return NextResponse.json(
+        { error: "Run must be completed to generate dashboards" },
+        { status: 400 },
+      );
+    }
+
+    const useCases = await getUseCasesByRunId(runId);
+    if (useCases.length === 0) {
+      return NextResponse.json({ error: "No use cases found" }, { status: 404 });
+    }
+
+    const metadata = await loadMetadataForRun(runId);
+    if (!metadata) {
+      return NextResponse.json({ error: "Metadata snapshot not found" }, { status: 404 });
+    }
+
+    const existingJob = await getDashboardJobStatus(runId);
+    if (existingJob?.status === "generating") {
+      return NextResponse.json(
+        { error: "Dashboard generation already in progress", status: "generating" },
+        { status: 409 },
+      );
+    }
+
+    let genieRecommendations;
+    try {
+      genieRecommendations = await getGenieRecommendationsByRunId(runId);
+    } catch {
+      // Genie recommendations not available
+    }
+
+    // Load existing dashboards from asset discovery (if available)
+    let existingDashboards: import("@/lib/discovery/types").DiscoveredDashboard[] | undefined;
+    try {
+      const discoveryData = await getDiscoveryResultsByRunId(runId);
+      if (discoveryData?.dashboards?.length) {
+        existingDashboards = discoveryData.dashboards.map((d) => ({
+          dashboardId: d.dashboardId,
+          displayName: d.displayName,
+          tables: d.tables,
+          isPublished: d.isPublished,
+          datasetCount: d.datasetCount,
+          widgetCount: d.widgetCount,
+        }));
+      }
+    } catch {
+      /* non-critical */
+    }
+
+    await startDashboardJob(runId);
+
+    runDashboardEngine({
+      run,
+      useCases,
+      metadata,
+      genieRecommendations,
+      existingDashboards,
+      domainFilter: domains,
+      onProgress: (message, percent) => updateDashboardJob(runId, message, percent),
+    })
+      .then(async (result) => {
+        await saveDashboardRecommendations(runId, result.recommendations, domains);
+        await completeDashboardJob(runId, result.recommendations.length);
+        logger.info("Dashboard Engine generation complete (async)", {
+          runId,
+          recommendationCount: result.recommendations.length,
+          domainFilter: domains ?? "all",
+        });
+      })
+      .catch(async (err) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        await failDashboardJob(runId, errMsg);
+        logger.error("Dashboard Engine generation failed (async)", {
+          runId,
+          error: errMsg,
+        });
+      });
+
+    return NextResponse.json({
+      runId,
+      status: "generating",
+      domains: domains ?? null,
+      message: domains
+        ? `Regenerating ${domains.length} dashboard${domains.length !== 1 ? "s" : ""}. Poll /generate/status for progress.`
+        : "Dashboard Engine generation started. Poll /generate/status for progress.",
+    });
+  } catch (error) {
+    return NextResponse.json({ error: safeErrorMessage(error) }, { status: 500 });
+  }
+}

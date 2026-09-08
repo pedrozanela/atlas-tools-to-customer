@@ -1,0 +1,29 @@
+Atlas
+Copyright 2026 Databricks, Inc.
+
+This product includes vendored software from the following upstream projects.
+Where an upstream project publishes a license, the vendored copy retains it
+and the relevant LICENSE file is included alongside the sources.
+
+----------------------------------------------------------------------------
+apps/forge/  —  Databricks Forge
+----------------------------------------------------------------------------
+
+Vendored from https://github.com/althrussell/databricks-forge at commit
+c09572d (November 2025). Atlas-specific patches (basePath, schema=forge,
+Lakebase wiring) are documented in docs/modules/FORGE.md and
+docs/decisions/0002-vendor-forge-upstream.md.
+
+License: see apps/forge/LICENSE.
+
+----------------------------------------------------------------------------
+apps/people/  —  Databricks Certifica
+----------------------------------------------------------------------------
+
+Vendored from https://github.com/RodrigoLima82/databricks-certifica-app at
+commit a9bc5e73b9e261b442cafc4e18f054c6907983fd (August 2026).
+Atlas-specific integration changes and provenance are documented in
+apps/people/UPSTREAM.md.
+
+The upstream repository did not publish a separate LICENSE or NOTICE file at
+the vendored commit. No contrary license attribution is asserted here.

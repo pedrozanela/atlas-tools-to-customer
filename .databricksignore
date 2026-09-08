@@ -1,0 +1,115 @@
+# Files NOT uploaded to the Databricks workspace by `databricks bundle deploy`.
+#
+# Atlas ships its Next.js zones PRE-BUILT. The supervisor launches them from
+# `.next/standalone/` bundles, while People/Certifica runs from its FastAPI
+# runtime tree and the root requirements.txt. The container does NOT run a
+# full monorepo `npm install` (root package.json is swapped for a deps-free
+# version by scripts/deploy.mjs).
+#
+# IMPORTANT: do NOT use unanchored patterns like `node_modules` or
+# `**/node_modules` — gitignore semantics make it impossible to re-include
+# a directory once a parent is excluded, and we need to KEEP
+# apps/*/.next/standalone/**/node_modules.
+
+# --- Workspace dependency installs (anchored paths only) ---
+/node_modules
+apps/forge/node_modules
+apps/waf/node_modules
+apps/tap/node_modules
+apps/web/node_modules
+packages/db/node_modules
+packages/shared/node_modules
+packages/ui/node_modules
+
+# --- Source code (not needed at runtime — standalone bundles everything) ---
+apps/*/app
+apps/*/components
+apps/*/lib
+apps/*/hooks
+apps/*/messages
+apps/*/i18n
+apps/*/prisma
+apps/*/scripts
+apps/*/public
+apps/*/src
+apps/*/styles
+apps/*/types
+apps/*/test
+apps/*/tests
+apps/*/__tests__
+apps/*/middleware.ts
+apps/*/next-env.d.ts
+apps/*/next.config.ts
+apps/*/postcss.config.*
+apps/*/tailwind.config.*
+apps/*/vitest.config.*
+apps/*/tsconfig*.json
+apps/*/.eslintrc*
+apps/*/.prettierrc*
+apps/*/package.json
+apps/*/package-lock.json
+apps/*/.env
+apps/*/.env.*
+apps/*/README*
+apps/*/CLAUDE*
+apps/*/DEPLOYMENT*
+apps/*/LICENSE
+
+# Certifica's Vite application is already built into backend/static.
+apps/people/frontend
+apps/people/backend/tests
+apps/people/backend/requirements-dev.txt
+apps/people/backend/.env
+apps/people/backend/.env.*
+
+# --- .next dev/build artefacts (keep ONLY .next/standalone) ---
+# Use `dir/**` form so the dir itself is scannable and re-includes work.
+apps/*/.next/**
+!apps/*/.next/standalone
+!apps/*/.next/standalone/**
+
+# --- Build / tooling caches ---
+**/.turbo
+apps/*/dist
+apps/*/build
+
+# --- Top-level dev configs (the container doesn't need them) ---
+turbo.json
+tsconfig.json
+tsconfig.base.json
+.eslintrc*
+.prettierrc*
+package-lock.json
+packages
+resources
+databricks.yml
+TODO.md
+LICENSE
+NOTICE
+README.md
+vitest.config.*
+
+# --- Git + IDE state ---
+.git
+.isaac
+.idea
+.vscode
+*.code-workspace
+atlas-prebuilt.zip
+
+# --- Local env files ---
+.env
+.env.*
+!.env.example
+
+# --- Python venvs / pycache (legacy TAP) ---
+**/__pycache__
+**/.pytest_cache
+**/.venv
+
+# --- Logs / OS ---
+*.log
+.DS_Store
+
+# --- Working docs ---
+docs/

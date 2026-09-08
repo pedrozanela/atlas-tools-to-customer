@@ -1,0 +1,48 @@
+{
+  "name": "atlas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atlas — Databricks Field Engineering suite for discovery, governance, value acceleration, and migration tools",
+  "license": "SEE LICENSE FILE",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:deploy-preflight": "node --test scripts/deploy-secret-preflight.test.mjs",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "schema:compile": "node packages/db/scripts/compile-schema.mjs",
+    "db:sync": "cd apps/forge && npx prisma generate && npx prisma db push && cd ../waf && npx prisma generate && npx prisma db push",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "deploy:check": "databricks bundle validate -t adb-brazil --profile adb-brazil",
+    "prepare:deploy": "npm run build && node scripts/prepare-standalone.mjs",
+    "deploy:adb-brazil": "npm run prepare:deploy && node scripts/deploy.mjs adb-brazil run --profile adb-brazil",
+    "deploy:logs": "databricks apps logs atlas-dev --profile adb-brazil"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "@types/node": "^25.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "npm@11.11.0",
+  "allowScripts": {
+    "@prisma/engines@7.5.0": true,
+    "prisma@7.5.0": true,
+    "@swc/core@1.15.33": true,
+    "sharp@0.34.5": true,
+    "lz4@0.6.5": true,
+    "@parcel/watcher@2.5.6": true,
+    "fsevents@2.3.3": true,
+    "unrs-resolver@1.11.1": true,
+    "msw@2.14.3": true
+  }
+}

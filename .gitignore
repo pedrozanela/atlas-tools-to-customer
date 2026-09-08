@@ -1,0 +1,79 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# build / framework caches
+.next/
+out/
+dist/
+# MOMA ships a hand-maintained SPA under frontend/dist (no bundler/build step),
+# so it must stay tracked AND be uploaded by `databricks bundle sync` (which
+# applies these ignore patterns). Re-include it despite the blanket `dist/`.
+!apps/moma/backend/frontend/dist/
+!apps/moma/backend/frontend/dist/**
+build/
+.turbo/
+**/*.map
+
+# Pre-built standalone tarballs uploaded to Databricks Apps. Built locally
+# by scripts/prepare-standalone.mjs; do not check in (~64MB total).
+apps/*/standalone.tar.gz
+apps/*/standalone.tar.gz.part-*
+
+# Deploy backup (created in-flight by scripts/deploy.mjs)
+package.json.deploy.bak
+
+# Forge provision script copied from apps/forge/scripts at deploy time
+# (kept fresh by scripts/prepare-standalone.mjs)
+scripts/forge-provision-lakebase.mjs
+
+# Serverless deploy SQL generated into prebuilt artifacts
+resources/lakebase-schema/*.sql
+
+# next.js
+next-env.d.ts
+
+# env (keep .env.local.example as the template)
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# misc
+.DS_Store
+*.log
+npm-debug.log*
+yarn-error.log
+atlas-prebuilt.zip
+
+# local agent / Python cache state
+.isaac/
+__pycache__/
+*.py[cod]
+
+# editor
+.vscode/
+.idea/
+*.swp
+
+# test
+coverage/
+
+# typescript
+*.tsbuildinfo
+
+# prisma — compiled schema (generated from fragments by packages/db) +
+# generated clients in every package
+packages/db/prisma/schema.prisma
+**/generated/
+
+# OS / system
+Thumbs.db
+
+# tap (Python + Vite)
+apps/tap/.venv/
+apps/tap/__pycache__/
+apps/tap/**/__pycache__/
+apps/tap/frontend/dist/
+apps/tap/frontend/node_modules/

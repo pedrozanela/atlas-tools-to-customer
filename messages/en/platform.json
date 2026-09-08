@@ -1,0 +1,72 @@
+{
+  "landing": {
+    "tagline": "Customer mapping suite for Databricks Field Engineering",
+    "statuses": {
+      "planned": "Coming soon",
+      "external": "External"
+    },
+    "actions": {
+      "explore": "Explore category"
+    },
+    "sections": {
+      "discovery": {
+        "title": "Discovery",
+        "subtitle": "Understand the customer's landscape"
+      },
+      "profilers": {
+        "title": "Profilers & Tools",
+        "subtitle": "Assess and accelerate technical migrations"
+      },
+      "inference": {
+        "title": "Governance & Readiness",
+        "subtitle": "Define the operating model and platform guardrails"
+      },
+      "acceleration": {
+        "title": "AI & Value Acceleration",
+        "subtitle": "Turn platform context into use cases and value"
+      }
+    },
+    "items": {
+      "operating_model": {
+        "title": "Platform Operating Model",
+        "description": "Define the CoE model, organizational roles, guardrails, and responsibilities by platform capability."
+      },
+      "tap": {
+        "title": "TAP Map",
+        "description": "Map the customer's technology stack, owners, and approval workflow."
+      },
+      "maturity": {
+        "title": "Maturity Assessment",
+        "description": "Evaluate the customer's data + AI maturity across capabilities."
+      },
+      "lakebridge": {
+        "title": "Lakebridge",
+        "description": "Databricks SQL migration accelerator (external reference)."
+      },
+      "microsoft_migration_factory": {
+        "title": "Microsoft Migration Factory",
+        "description": "Plan and accelerate Microsoft data platform migrations to Databricks."
+      },
+      "waf": {
+        "title": "WAF Assessment",
+        "description": "Assess workspace against the Databricks Well-Architected Framework."
+      },
+      "forge": {
+        "title": "Forge",
+        "description": "Discover use cases from Unity Catalog metadata with AI."
+      },
+      "genie_workbench": {
+        "title": "Genie Workbench",
+        "description": "Author and benchmark Genie spaces (external — to be vendored)."
+      },
+      "people": {
+        "title": "People & Training",
+        "description": "Guide learners through training paths, certification practice, and measurable progress."
+      },
+      "moma": {
+        "title": "Maturity & Operating Model Assessment",
+        "description": "Assess data maturity and the target operating model (Data Mesh as one lens), with prioritized recommendations."
+      }
+    }
+  }
+}

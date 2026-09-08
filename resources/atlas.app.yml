@@ -1,0 +1,91 @@
+# Single Databricks App that ships the entire Atlas suite.
+#
+# The source upload is the repo root (`source_code_path: ..`) so the
+# supervisor in scripts/start-databricks-app.mjs can boot apps/web,
+# apps/forge, apps/waf, and apps/tap from a shared workspace
+# install. Build artefacts (each apps/<x>/.next/) must be present in
+# the source tree at deploy time — see README "Deploy" section.
+#
+# Environment variables live in /app.yaml at the source root, NOT here.
+# Secret resources, however, MUST be declared here so app.yaml can
+# `valueFrom` them.
+
+resources:
+  apps:
+    atlas:
+      name: ${var.app_name}
+      description: ${var.app_description}
+      source_code_path: ..
+      user_api_scopes:
+        - sql
+        - genie
+        - files
+      resources:
+        # Forge uses native Postgres login (atlas-admin role) against the
+        # `databricks-atlas` Lakebase Autoscale project. The password
+        # lives in the workspace secret scope `atlas-app`, key
+        # `lakebase-atlas-admin-password` (created via the CLI:
+        # `databricks secrets put-secret atlas-app
+        #   lakebase-atlas-admin-password --string-value '...'`).
+        - name: lakebase-atlas-admin-password
+          description: "Atlas Lakebase admin password"
+          secret:
+            scope: atlas-app
+            key: lakebase-atlas-admin-password
+            permission: READ
+
+        # Certifica signs its own short-lived application session token. The
+        # secret value is provisioned out-of-band and is never stored in this
+        # repository or rendered into app.yaml.
+        - name: certifica-jwt-secret
+          description: "Certifica application JWT signing secret"
+          secret:
+            scope: ${var.certifica_secret_scope}
+            key: ${var.certifica_jwt_secret_key}
+            permission: READ
+
+        # Password for the initial demo administrator created by the
+        # idempotent Certifica seed. This is separate from the JWT secret so
+        # either credential can be rotated independently.
+        - name: certifica-seed-admin-password
+          description: "Certifica initial demo administrator password"
+          secret:
+            scope: ${var.certifica_secret_scope}
+            key: ${var.certifica_seed_admin_password_key}
+            permission: READ
+
+        # TAP and the non-WAF assessment paths need the shared SQL warehouse.
+        # The SP token only gets the `sql` scope when the warehouse is
+        # declared here.
+        - name: atlas-warehouse
+          description: "Shared SQL warehouse used by Atlas modules"
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+
+        # Question generation uses the Foundation Model API. Declaring the
+        # endpoint here grants CAN_QUERY to the Atlas app service principal.
+        - name: certifica-llm-endpoint
+          description: "Foundation Model endpoint used by Certifica"
+          serving_endpoint:
+            name: ${var.certifica_llm_endpoint}
+            permission: CAN_QUERY
+
+        # Preserve the existing Forge Lakebase binding when the app is updated.
+        # Forge currently authenticates with its native database role, while
+        # this binding also keeps the App SP authorized for platform-managed
+        # Lakebase connectivity and future OAuth use.
+        - name: database
+          description: "Shared Lakebase for Atlas modules"
+          postgres:
+            branch: projects/${var.lakebase_project_id}/branches/${var.lakebase_branch_id}
+            database: projects/${var.lakebase_project_id}/branches/${var.lakebase_branch_id}/databases/${var.lakebase_database_id}
+            permission: CAN_CONNECT_AND_CREATE
+
+        # NOTE: TAP needs USE CATALOG + USE SCHEMA + CREATE TABLE + MODIFY
+        # on the UC catalog/schema, but Databricks Apps' `uc_securable`
+        # resource only supports TABLE/VOLUME/FUNCTION/CONNECTION (and
+        # only SELECT/READ_VOLUME/etc — not MODIFY). So we can't grant
+        # this declaratively. Instead, scripts/deploy.mjs runs the GRANTs
+        # as a post-deploy step against the warehouse, using the app SP
+        # ID discovered via `databricks apps get`.

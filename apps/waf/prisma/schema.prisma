@@ -1,0 +1,159 @@
+// Atlas WAF — Prisma Schema
+//
+// Connects to Lakebase Autoscaling (Postgres-compatible). Tables live in
+// schema "waf". Sourced from the WAF feature originally inside Forge —
+// see apps/forge/lib/engines/waf-assessment/ for the engine reference.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["waf"]
+}
+
+// ---------------------------------------------------------------------------
+// WAF Controls — the catalog of pillars, principles and best practices.
+// ---------------------------------------------------------------------------
+
+model WafControl {
+  wafId                  String   @id @map("waf_id")
+  pillar                 String                                       // governance | interoperability_usability | operational_excellence | security_compliance_privacy | reliability | performance_efficiency | cost_optimisation
+  pillarName             String   @map("pillar_name")                 // verbatim from CSV (e.g. "01 - Data And AI Governance")
+  principle              String
+  bestPractice           String   @map("best_practice")
+  capabilities           String?
+  details                String?
+  thresholdPercentage    Float?   @map("threshold_percentage")        // null for qualitative controls
+  metricDefinition       String?  @map("metric_definition")
+  recommendationIfNotMet String?  @map("recommendation_if_not_met")
+  fixActionEngine        String?  @map("fix_action_engine")
+  fixActionParamsJson    String?  @map("fix_action_params_json")
+  evaluationType         String   @default("automatic") @map("evaluation_type") // automatic | qualitative
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  results         WafControlResult[]
+  recommendations WafGenieRecommendation[]
+
+  @@index([pillar])
+  @@map("controls")
+  @@schema("waf")
+}
+
+// Assessment run header — one per execution of the assessment engine.
+model WafAssessment {
+  assessmentId      String    @id @map("assessment_id")
+  ownerEmail        String?   @map("owner_email")
+  status            String    @default("pending")                     // pending | running | completed | failed
+  scope             String?                                           // optional UC scope label
+  triggeredBy       String?   @map("triggered_by")
+  governanceScore   Float?    @map("governance_score")
+  iuScore           Float?    @map("iu_score")
+  oeScore           Float?    @map("oe_score")
+  scpScore          Float?    @map("scp_score")
+  reliabilityScore  Float?    @map("reliability_score")
+  costScore         Float?    @map("cost_score")
+  performanceScore  Float?    @map("performance_score")
+  overallScore      Float?    @map("overall_score")
+  totalControls     Int       @default(0) @map("total_controls")
+  metControls       Int       @default(0) @map("met_controls")
+  errorMessage      String?   @map("error_message")
+  recommendationSetupStatus String @default("not_started") @map("recommendation_setup_status") // not_started | running | completed | failed
+  recommendationSetupError  String? @map("recommendation_setup_error")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  completedAt       DateTime? @map("completed_at")
+
+  results         WafControlResult[]
+  recommendations WafGenieRecommendation[]
+
+  @@index([createdAt])
+  @@index([status])
+  @@index([ownerEmail])
+  @@map("assessments")
+  @@schema("waf")
+}
+
+model WafControlResult {
+  id                  String   @id @default(uuid())
+  assessmentId        String   @map("assessment_id")
+  wafId               String   @map("waf_id")
+  pillar              String
+  scorePercentage     Float    @map("score_percentage")
+  thresholdPercentage Float    @map("threshold_percentage")
+  thresholdMet        Boolean  @map("threshold_met")
+  evaluatedAt         DateTime @default(now()) @map("evaluated_at")
+
+  assessment WafAssessment @relation(fields: [assessmentId], references: [assessmentId], onDelete: Cascade)
+  control    WafControl    @relation(fields: [wafId], references: [wafId])
+
+  @@unique([assessmentId, wafId])
+  @@index([assessmentId])
+  @@index([wafId])
+  @@index([pillar])
+  @@map("control_results")
+  @@schema("waf")
+}
+
+// One Agent mode analysis per control that did not meet its threshold.
+// Rows are queued when an assessment completes and updated asynchronously as
+// the Genie Agent streams its report and supporting SQL queries.
+model WafGenieRecommendation {
+  id                String    @id @default(uuid())
+  assessmentId      String    @map("assessment_id")
+  wafId             String    @map("waf_id")
+  agentId           String    @map("agent_id")
+  locale            String    @default("en")
+  status            String    @default("pending") // pending | running | completed | failed
+  conversationId    String?   @map("conversation_id")
+  responseId        String?   @map("response_id")
+  promptText        String    @map("prompt_text")
+  reportMarkdown    String?   @map("report_markdown")
+  citationsJson     String?   @map("citations_json")
+  documentationJson String?   @map("documentation_json")
+  evidenceJson      String?   @map("evidence_json")
+  queryCount        Int       @default(0) @map("query_count")
+  errorCode         String?   @map("error_code")
+  errorMessage      String?   @map("error_message")
+  startedAt         DateTime? @map("started_at")
+  completedAt       DateTime? @map("completed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  assessment WafAssessment @relation(fields: [assessmentId], references: [assessmentId], onDelete: Cascade)
+  control    WafControl    @relation(fields: [wafId], references: [wafId])
+
+  @@unique([assessmentId, wafId])
+  @@index([assessmentId, status])
+  @@index([wafId])
+  @@map("genie_recommendations")
+  @@schema("waf")
+}
+
+model WafQualitativeResponse {
+  wafId        String   @id @map("waf_id")
+  response     String                                       // yes | partial | no | not_applicable
+  notes        String?
+  respondedBy  String?  @map("responded_by")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("qualitative_responses")
+  @@schema("waf")
+}
+
+model WafIgnoredResource {
+  id            String   @id @default(uuid())
+  wafId         String   @map("waf_id")
+  resourceType  String?  @map("resource_type")
+  resourceId    String?  @map("resource_id")
+  reason        String
+  ignoredBy     String?  @map("ignored_by")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([wafId, resourceType, resourceId])
+  @@index([wafId])
+  @@map("ignored_resources")
+  @@schema("waf")
+}

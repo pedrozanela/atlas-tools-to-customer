@@ -1,0 +1,66 @@
+command:
+  - sh
+  - -c
+  - uvicorn app.main:app --host 0.0.0.0 --port ${DATABRICKS_APP_PORT:-8000}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPLATE. Preencha os valores marcados <...> para o seu workspace, ou use o
+# notebook setup/setup_databricks.py, que GERA este arquivo automaticamente.
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  - name: MOCK_MODE
+    value: "false"
+  - name: APP_ENV
+    value: "production"
+
+  # ── Lakebase (Postgres) via OAuth do service principal do app ──────────────
+  # Sem PGPASSWORD: o app gera credencial OAuth via w.postgres para o endpoint
+  # Autoscaling e usa o client_id do service principal como PGUSER.
+  - name: LAKEBASE_ENDPOINT_NAME
+    value: "projects/<project>/branches/<branch>/endpoints/<endpoint>"
+  - name: PGHOST
+    value: "<endpoint-host>"
+  - name: PGPORT
+    value: "5432"
+  - name: PGDATABASE
+    value: "databricks_postgres"
+  - name: PGUSER
+    value: "<app-service-principal-client-id>"
+  - name: PGSSLMODE
+    value: "require"
+  - name: PGSCHEMA
+    value: "certifica"
+
+  # ── LLM (Foundation Model API) ─────────────────────────────────────────────
+  # Qualquer chat model do workspace (ex.: databricks-claude-opus-4-8, gpt-oss-120b).
+  - name: LLM_ENDPOINT
+    value: "databricks-claude-opus-4-8"
+
+  # ── Autenticação (JWT) ─────────────────────────────────────────────────────
+  - name: ENABLE_JWT_AUTH
+    value: "true"
+  - name: CERTIFICA_JWT_SECRET
+    valueFrom: jwt-secret
+  - name: AUTH_HEADER
+    value: "X-App-Auth"
+  - name: SUPERADMIN_EMAILS
+    value: "<seu-email@empresa.com>"
+  - name: SEED_ADMIN_PASSWORD
+    valueFrom: seed-admin-password
+  - name: PASS_MARK
+    value: "70"
+
+  # ── Primeiro tenant (opcional) ─────────────────────────────────────────────
+  - name: DEFAULT_TENANT_SLUG
+    value: ""
+  - name: DEFAULT_TENANT_NAME
+    value: ""
+  - name: CERTIFICA_DATABRICKS_SSO_ENABLED
+    value: "false"
+
+  # Seed idempotente no primeiro boot (cria schema + banco de questões + superadmin).
+  - name: SEED_ON_STARTUP
+    value: "true"
+
+  - name: CORS_ORIGINS
+    value: "https://*.databricksapps.com"

@@ -1,0 +1,545 @@
+#!/usr/bin/env node
+
+/**
+ * Lakebase Autoscale provisioning script (standalone, no TypeScript).
+ *
+ * Called by scripts/start.sh BEFORE prisma db push. Ensures the Lakebase
+ * project exists, resolves the endpoint, generates a DB credential, and
+ * prints startup/runtime connection metadata to stdout.
+ *
+ * Exits 0 on success, exits 1 on failure.
+ * All diagnostic output goes to stderr so stdout only contains:
+ *   1) direct endpoint URL (startup DDL only)
+ *   2) endpoint resource name
+ *   3) pooler hostname (runtime queries)
+ *   4) username
+ */
+
+const PROJECT_ID_BASE = process.env.FORGE_APP_NAME || "databricks-forge";
+const BRANCH_ID = "production";
+const DATABASE_NAME = "databricks_postgres";
+const PG_VERSION = "17";
+const DISPLAY_NAME =
+  PROJECT_ID_BASE === "databricks-forge" ? "Databricks Forge" : `Forge (${PROJECT_ID_BASE})`;
+const API_TIMEOUT = 30_000;
+const LRO_TIMEOUT = 120_000;
+const LRO_POLL = 5_000;
+
+function derivePoolerHost(directHost) {
+  return directHost.replace(/^(ep-[^.]+)/, "$1-pooler");
+}
+
+function getProjectId() {
+  if (process.env.LAKEBASE_PROJECT_ID) return process.env.LAKEBASE_PROJECT_ID;
+  const clientId = process.env.DATABRICKS_CLIENT_ID || "";
+  if (clientId) return `${PROJECT_ID_BASE}-${clientId.slice(0, 8)}`;
+  return PROJECT_ID_BASE;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function log(msg) {
+  process.stderr.write(`[provision] ${msg}\n`);
+}
+
+function getHost() {
+  let h = process.env.DATABRICKS_HOST || "";
+  if (h && !h.startsWith("https://")) h = `https://${h}`;
+  return h.replace(/\/+$/, "");
+}
+
+async function timedFetch(url, init, timeoutMs = API_TIMEOUT) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Workspace OAuth token
+// ---------------------------------------------------------------------------
+
+async function getWorkspaceToken() {
+  const clientId = process.env.DATABRICKS_CLIENT_ID;
+  const clientSecret = process.env.DATABRICKS_CLIENT_SECRET;
+  const host = getHost();
+
+  const resp = await timedFetch(`${host}/oidc/v1/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+    },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "all-apis",
+    }),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Workspace OAuth failed (${resp.status}): ${text}`);
+  }
+
+  const data = await resp.json();
+  return data.access_token;
+}
+
+// ---------------------------------------------------------------------------
+// Lakebase REST API
+// ---------------------------------------------------------------------------
+
+let _token = null;
+
+async function api(method, path, body) {
+  if (!_token) _token = await getWorkspaceToken();
+  const host = getHost();
+  const opts = {
+    method,
+    headers: {
+      Authorization: `Bearer ${_token}`,
+      "Content-Type": "application/json",
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  return timedFetch(`${host}/api/2.0/postgres/${path}`, opts);
+}
+
+// ---------------------------------------------------------------------------
+// Cost governance (optional)
+//
+// Reads FORGE_BUDGET_POLICY_ID (string) and FORGE_CUSTOM_TAGS (JSON array)
+// from the environment. Both are optional. When unset, the create spec is
+// left untouched and no reconcile PATCH is issued. Invalid tag JSON is
+// logged and ignored -- a malformed value must not block startup.
+// ---------------------------------------------------------------------------
+
+function getCostGovernance() {
+  const budgetPolicyId = (process.env.FORGE_BUDGET_POLICY_ID || "").trim() || undefined;
+
+  let customTags;
+  const raw = (process.env.FORGE_CUSTOM_TAGS || "").trim();
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error("FORGE_CUSTOM_TAGS must be a JSON array");
+      customTags = parsed.map((entry) => {
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          typeof entry.key !== "string" ||
+          typeof entry.value !== "string"
+        ) {
+          throw new Error("each tag must be {key: string, value: string}");
+        }
+        return { key: entry.key, value: entry.value };
+      });
+    } catch (err) {
+      log(`WARNING: Invalid FORGE_CUSTOM_TAGS, ignoring: ${err.message}`);
+      customTags = undefined;
+    }
+  }
+
+  return { budgetPolicyId, customTags };
+}
+
+function tagsEqual(a, b) {
+  if (a.length !== b.length) return false;
+  const sortByKey = (arr) => [...arr].sort((x, y) => x.key.localeCompare(y.key));
+  const sa = sortByKey(a);
+  const sb = sortByKey(b);
+  for (let i = 0; i < sa.length; i += 1) {
+    if (sa[i].key !== sb[i].key || sa[i].value !== sb[i].value) return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Reconcile cost-governance fields on an existing project (idempotent PATCH).
+// Reads desired values from env; skips when neither is set. Reads current
+// values from `spec` first and falls back to `status` so we don't mistake
+// "not returned by GET" for "not configured" and PATCH the same value on
+// every boot.
+// ---------------------------------------------------------------------------
+
+async function reconcileCostGovernance(projectId, currentProject) {
+  const { budgetPolicyId, customTags } = getCostGovernance();
+  if (budgetPolicyId === undefined && customTags === undefined) return;
+
+  const currentBudget =
+    currentProject.spec?.budget_policy_id ?? currentProject.status?.budget_policy_id;
+  const currentTags = currentProject.spec?.custom_tags ?? currentProject.status?.custom_tags;
+
+  if (budgetPolicyId !== undefined && budgetPolicyId !== currentBudget) {
+    log(`Reconciling budget_policy_id...`);
+    const resp = await api(
+      "PATCH",
+      `projects/${encodeURIComponent(projectId)}?update_mask=spec.budget_policy_id`,
+      { spec: { budget_policy_id: budgetPolicyId } },
+    );
+    if (resp.ok) {
+      const op = await resp.json();
+      if (op.name && !op.done) await pollOp(op.name);
+      log(`budget_policy_id reconciled.`);
+    } else {
+      const text = await resp.text();
+      log(`WARNING: Failed to reconcile budget_policy_id (${resp.status}): ${text}`);
+    }
+  }
+
+  if (customTags !== undefined && !tagsEqual(currentTags || [], customTags)) {
+    log(`Reconciling custom_tags (${customTags.length} tag(s))...`);
+    const resp = await api(
+      "PATCH",
+      `projects/${encodeURIComponent(projectId)}?update_mask=spec.custom_tags`,
+      { spec: { custom_tags: customTags } },
+    );
+    if (resp.ok) {
+      const op = await resp.json();
+      if (op.name && !op.done) await pollOp(op.name);
+      log(`custom_tags reconciled.`);
+    } else {
+      const text = await resp.text();
+      log(`WARNING: Failed to reconcile custom_tags (${resp.status}): ${text}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Project check / create
+// ---------------------------------------------------------------------------
+
+async function ensureProject() {
+  const projectId = getProjectId();
+  const { budgetPolicyId, customTags } = getCostGovernance();
+
+  const getResp = await api("GET", `projects/${projectId}`);
+  if (getResp.ok) {
+    log(`Project '${projectId}' exists.`);
+    try {
+      const project = await getResp.json();
+      await reconcileCostGovernance(projectId, project);
+    } catch (err) {
+      log(`WARNING: Cost-governance reconcile failed (non-fatal): ${err.message}`);
+    }
+    return;
+  }
+  if (getResp.status !== 404) {
+    const text = await getResp.text();
+    throw new Error(`Check project failed (${getResp.status}): ${text}`);
+  }
+
+  log(
+    `Creating Lakebase project '${projectId}' ` +
+      `(budget_policy=${Boolean(budgetPolicyId)}, custom_tags=${customTags?.length ?? 0})...`,
+  );
+  const spec = { display_name: DISPLAY_NAME, pg_version: PG_VERSION };
+  if (budgetPolicyId) spec.budget_policy_id = budgetPolicyId;
+  if (customTags && customTags.length > 0) spec.custom_tags = customTags;
+
+  const createResp = await api("POST", `projects?project_id=${encodeURIComponent(projectId)}`, {
+    spec,
+  });
+
+  if (createResp.status === 409) {
+    log("Project already exists (409).");
+    return;
+  }
+  if (!createResp.ok) {
+    const text = await createResp.text();
+    throw new Error(`Create project failed (${createResp.status}): ${text}`);
+  }
+
+  const op = await createResp.json();
+  if (op.name && !op.done) {
+    await pollOp(op.name);
+  }
+  log("Project created.");
+}
+
+async function pollOp(name) {
+  const start = Date.now();
+  while (Date.now() - start < LRO_TIMEOUT) {
+    await new Promise((r) => setTimeout(r, LRO_POLL));
+    const resp = await api("GET", name);
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Poll LRO failed (${resp.status}): ${text}`);
+    }
+    const op = await resp.json();
+    if (op.done) {
+      if (op.error) throw new Error(`LRO error: ${JSON.stringify(op.error)}`);
+      return;
+    }
+    log(`  still creating... (${Math.round((Date.now() - start) / 1000)}s)`);
+  }
+  throw new Error(`Project creation timed out after ${LRO_TIMEOUT / 1000}s`);
+}
+
+// ---------------------------------------------------------------------------
+// Scale-to-zero configuration
+// ---------------------------------------------------------------------------
+
+const DEFAULT_SCALE_TO_ZERO_TIMEOUT = 300;
+
+function getDesiredScaleToZeroTimeout() {
+  const raw = process.env.LAKEBASE_SCALE_TO_ZERO_TIMEOUT ?? "";
+  if (raw === "disabled" || raw === "false" || raw === "off") return null;
+  if (raw === "" || raw === "default") return DEFAULT_SCALE_TO_ZERO_TIMEOUT;
+  const parsed = parseInt(raw, 10);
+  if (isNaN(parsed) || parsed < 0) return DEFAULT_SCALE_TO_ZERO_TIMEOUT;
+  if (parsed === 0) return null;
+  return Math.max(parsed, 60);
+}
+
+async function ensureScaleToZero(epName) {
+  const desiredTimeout = getDesiredScaleToZeroTimeout();
+
+  const detResp = await api("GET", epName);
+  if (!detResp.ok) {
+    log(`WARNING: Could not read endpoint for scale-to-zero check (${detResp.status}), skipping.`);
+    return;
+  }
+  const detail = await detResp.json();
+
+  const currentDuration =
+    detail.status?.suspend_timeout_duration || detail.spec?.suspend_timeout_duration || null;
+  const currentNoSuspension = detail.spec?.no_suspension === true;
+
+  if (desiredTimeout === null) {
+    if (currentNoSuspension) {
+      log("Scale-to-zero already disabled (as requested).");
+      return;
+    }
+    log("Disabling scale-to-zero (explicitly requested)...");
+    const patchResp = await api("PATCH", `${epName}?update_mask=spec.no_suspension`, {
+      name: epName,
+      spec: { no_suspension: true },
+    });
+    if (!patchResp.ok) {
+      const text = await patchResp.text();
+      log(`WARNING: Failed to disable scale-to-zero (${patchResp.status}): ${text}`);
+      return;
+    }
+    const op = await patchResp.json();
+    if (op.name && !op.done) await pollOp(op.name);
+    log("Scale-to-zero disabled.");
+    return;
+  }
+
+  const desiredDuration = `${desiredTimeout}s`;
+  if (!currentNoSuspension && currentDuration === desiredDuration) {
+    log(`Scale-to-zero already enabled (timeout: ${desiredDuration}).`);
+    return;
+  }
+
+  log(`Enabling scale-to-zero (timeout: ${desiredDuration})...`);
+  const patchResp = await api("PATCH", `${epName}?update_mask=spec.no_suspension`, {
+    name: epName,
+    spec: { no_suspension: false },
+  });
+  if (!patchResp.ok) {
+    const text = await patchResp.text();
+    log(`WARNING: Failed to enable scale-to-zero (${patchResp.status}): ${text}`);
+    return;
+  }
+  const op = await patchResp.json();
+  if (op.name && !op.done) await pollOp(op.name);
+
+  const timeoutResp = await api(
+    "PATCH",
+    `${epName}?update_mask=spec.suspend_timeout_duration`,
+    { name: epName, spec: { suspend_timeout_duration: desiredDuration } },
+  );
+  if (!timeoutResp.ok) {
+    log(
+      `WARNING: Scale-to-zero enabled but could not set custom timeout ` +
+        `(${timeoutResp.status}); using API default (300s).`,
+    );
+  } else {
+    const top = await timeoutResp.json();
+    if (top.name && !top.done) await pollOp(top.name);
+  }
+  log(`Scale-to-zero enabled (timeout: ${desiredDuration}).`);
+}
+
+// ---------------------------------------------------------------------------
+// Endpoint + username + credential
+// ---------------------------------------------------------------------------
+
+async function getEndpointHost() {
+  const projectId = getProjectId();
+  const listResp = await api("GET", `projects/${projectId}/branches/${BRANCH_ID}/endpoints`);
+  if (!listResp.ok) {
+    const text = await listResp.text();
+    throw new Error(`List endpoints failed (${listResp.status}): ${text}`);
+  }
+  const data = await listResp.json();
+  const eps = data.endpoints || data.items || [];
+  if (!eps.length) throw new Error("No endpoints on production branch");
+
+  const epName = eps[0].name;
+  const detResp = await api("GET", epName);
+  if (!detResp.ok) {
+    const text = await detResp.text();
+    throw new Error(`Get endpoint failed (${detResp.status}): ${text}`);
+  }
+  const detail = await detResp.json();
+  const host = detail.status?.hosts?.host;
+  if (!host) throw new Error(`Endpoint has no host: ${JSON.stringify(detail)}`);
+  return { host, epName };
+}
+
+async function getUsername() {
+  const host = getHost();
+  const maxRetries = 5;
+  let lastErr;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const resp = await timedFetch(`${host}/api/2.0/preview/scim/v2/Me`, {
+      headers: {
+        Authorization: `Bearer ${_token}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (resp.ok) {
+      const data = await resp.json();
+      return data.userName || data.displayName;
+    }
+
+    const text = await resp.text();
+
+    if (resp.status === 429 && attempt < maxRetries - 1) {
+      const delaySec = Math.pow(2, attempt + 1);
+      log(
+        `SCIM /Me rate-limited (429), retrying in ${delaySec}s... (attempt ${attempt + 1}/${maxRetries})`,
+      );
+      await new Promise((r) => setTimeout(r, delaySec * 1000));
+      continue;
+    }
+
+    lastErr = new Error(`SCIM /Me failed (${resp.status}): ${text}`);
+  }
+
+  throw lastErr;
+}
+
+async function generateCredential(epName) {
+  const resp = await api("POST", "credentials", { endpoint: epName });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Generate credential failed (${resp.status}): ${text}`);
+  }
+  const data = await resp.json();
+  return data.token;
+}
+
+// ---------------------------------------------------------------------------
+// Credential verification — wait until the credential is actually usable.
+//
+// Lakebase credentials can take 15-30s to propagate, especially on cold
+// endpoints (scale-from-zero). Strategy:
+//   1. Wait an initial delay before first attempt (reduces wasted connections)
+//   2. Use generous intervals between attempts (avoids connection rate limiter)
+//   3. Reuse a single Pool to minimise TCP churn
+//   4. Return true/false — caller decides whether to retry with a new credential
+// ---------------------------------------------------------------------------
+
+const VERIFY_INITIAL_DELAY_MS = 5_000;
+const VERIFY_MAX_ATTEMPTS = 8;
+const VERIFY_INTERVAL_MS = 3_000;
+
+async function verifyCredential(url) {
+  const pg = (await import("pg")).default;
+
+  log(`Waiting ${VERIFY_INITIAL_DELAY_MS / 1_000}s for credential propagation...`);
+  await new Promise((r) => setTimeout(r, VERIFY_INITIAL_DELAY_MS));
+
+  const pool = new pg.Pool({ connectionString: url, connectionTimeoutMillis: 10_000, max: 1 });
+
+  try {
+    for (let attempt = 1; attempt <= VERIFY_MAX_ATTEMPTS; attempt++) {
+      try {
+        await pool.query("SELECT 1");
+        log(`Credential verified (attempt ${attempt}/${VERIFY_MAX_ATTEMPTS}).`);
+        return true;
+      } catch (err) {
+        if (attempt < VERIFY_MAX_ATTEMPTS) {
+          log(
+            `Credential not yet usable (attempt ${attempt}/${VERIFY_MAX_ATTEMPTS}), waiting ${VERIFY_INTERVAL_MS / 1_000}s...`,
+          );
+          await new Promise((r) => setTimeout(r, VERIFY_INTERVAL_MS));
+        } else {
+          log(
+            `Credential verification failed after ${VERIFY_MAX_ATTEMPTS} attempts: ${err.message}`,
+          );
+        }
+      }
+    }
+    return false;
+  } finally {
+    await pool.end().catch(() => {});
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+const CREDENTIAL_MAX_GENERATIONS = 2;
+
+async function main() {
+  const clientId = process.env.DATABRICKS_CLIENT_ID;
+  const clientSecret = process.env.DATABRICKS_CLIENT_SECRET;
+  const host = process.env.DATABRICKS_HOST;
+
+  if (!clientId || !clientSecret || !host) {
+    log("ERROR: Missing DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET, or DATABRICKS_HOST");
+    process.exit(1);
+  }
+
+  await ensureProject();
+
+  const [{ host: epHost, epName }, username] = await Promise.all([
+    getEndpointHost(),
+    getUsername(),
+  ]);
+
+  await ensureScaleToZero(epName);
+
+  const poolerHost = derivePoolerHost(epHost);
+
+  for (let gen = 1; gen <= CREDENTIAL_MAX_GENERATIONS; gen++) {
+    const dbToken = await generateCredential(epName);
+
+    const url =
+      `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(dbToken)}` +
+      `@${epHost}/${DATABASE_NAME}?sslmode=require&uselibpqcompat=true`;
+
+    const verified = await verifyCredential(url);
+
+    if (verified) {
+      process.stdout.write(`${url}\n${epName}\n${poolerHost}\n${username}`);
+      log("Connection metadata generated.");
+      return;
+    }
+
+    if (gen < CREDENTIAL_MAX_GENERATIONS) {
+      log(`Regenerating credential (attempt ${gen + 1}/${CREDENTIAL_MAX_GENERATIONS})...`);
+    }
+  }
+
+  log("FATAL: Could not verify database credential after multiple generations.");
+  process.exit(1);
+}
+
+main().catch((err) => {
+  log(`FATAL: ${err.message}`);
+  process.exit(1);
+});

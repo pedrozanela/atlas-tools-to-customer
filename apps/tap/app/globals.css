@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+.material-symbols-rounded {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/*
+ * Brand color tokens — consumed as Tailwind utilities (bg-canvas, text-brand, etc.).
+ * Mirror these values in lib/colors.ts for JS use.
+ * To change the palette: update both this block and colors.ts.
+ */
+@theme {
+  --color-canvas:       #F9F7F4;
+  --color-surface:      #FFFFFF;
+  --color-raised:       #EEEDE9;
+  --color-raised-hover: #E0DED9;
+  --color-brand:        #FF3621;
+  --color-brand-hover:  #D42F1A;
+  --color-track:        #EEEDE9;
+  --color-foreground:   #1B3139;
+
+  --shadow-card:   0 1px 3px rgba(27,49,57,0.08), 0 3px 8px rgba(27,49,57,0.05);
+  --shadow-panel:  0 2px 12px rgba(27,49,57,0.10);
+  --shadow-hover:  0 4px 16px rgba(27,49,57,0.14);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: var(--color-canvas);
+  color: var(--color-foreground);
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+img { max-width: 100%; height: auto; }
+
+/* Print stylesheet — used by the SubmittedSummary "Download PDF" button.
+   Forces landscape A4 so the 7-column canvas grid fits with margin to
+   spare. The on-screen layout already matches print 1:1; we just nuke
+   chrome and remove default browser margins. Triggered via
+   window.print(). */
+@page { size: A4 landscape; margin: 10mm; }
+
+@media print {
+  /* Keep the on-screen design tokens (canvas cream + foreground navy)
+     in the PDF so it matches the screen 1:1. We only strip the app
+     chrome and ensure the canvas fills the page. */
+  body > div > header,
+  .no-print { display: none !important; }
+  /* Collapsible sections in the canvas (Criteria + Architecture) live
+     under .print-show. They may carry Tailwind's `hidden` class on
+     screen when collapsed; force-display them on print so the PDF
+     always includes the full deliverable. */
+  .print-show,
+  .print-show.hidden { display: block !important; }
+  .print-report {
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    box-shadow: none !important;
+    page-break-inside: avoid;
+  }
+  /* Force browser to print background colours/images so the navy
+     header bars and cream canvas survive the PDF render. */
+  .print-report,
+  .print-report * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  main { padding: 0 !important; }
+}

@@ -1,0 +1,72 @@
+{
+  "landing": {
+    "tagline": "Suite de mapeamento de clientes para Field Engineering",
+    "statuses": {
+      "planned": "Em breve",
+      "external": "Externo"
+    },
+    "actions": {
+      "explore": "Explorar categoria"
+    },
+    "sections": {
+      "discovery": {
+        "title": "Discovery",
+        "subtitle": "Entender o cenário do cliente"
+      },
+      "profilers": {
+        "title": "Profilers e Ferramentas",
+        "subtitle": "Avaliar e acelerar migrações técnicas"
+      },
+      "inference": {
+        "title": "Governança e Prontidão",
+        "subtitle": "Definir o modelo operacional e os guardrails da plataforma"
+      },
+      "acceleration": {
+        "title": "Aceleração de IA e Valor",
+        "subtitle": "Transformar o contexto da plataforma em casos de uso e valor"
+      }
+    },
+    "items": {
+      "operating_model": {
+        "title": "Modelo Operacional da Plataforma",
+        "description": "Define o modelo de CoE, papéis, guardrails e responsabilidades por capacidade da plataforma."
+      },
+      "tap": {
+        "title": "TAP Map",
+        "description": "Mapeia o stack tecnológico, responsáveis e fluxo de aprovação do cliente."
+      },
+      "maturity": {
+        "title": "Maturity Assessment",
+        "description": "Avalia a maturidade de dados + IA do cliente em diferentes capacidades."
+      },
+      "lakebridge": {
+        "title": "Lakebridge",
+        "description": "Acelerador de migração SQL da Databricks (referência externa)."
+      },
+      "microsoft_migration_factory": {
+        "title": "Microsoft Migration Factory",
+        "description": "Planeja e acelera migrações da plataforma de dados Microsoft para Databricks."
+      },
+      "waf": {
+        "title": "WAF Assessment",
+        "description": "Avalia o workspace contra o Databricks Well-Architected Framework."
+      },
+      "forge": {
+        "title": "Forge",
+        "description": "Descoberta de casos de uso a partir de metadados do Unity Catalog com IA."
+      },
+      "genie_workbench": {
+        "title": "Genie Workbench",
+        "description": "Criação e benchmark de Genie spaces (externo — a vendorar)."
+      },
+      "people": {
+        "title": "People & Training",
+        "description": "Orienta participantes com trilhas de formação, simulados de certificação e progresso mensurável."
+      },
+      "moma": {
+        "title": "Maturity & Operating Model Assessment",
+        "description": "Avalie a maturidade de dados e o modelo operacional-alvo (Data Mesh como uma lente), com recomendações priorizadas."
+      }
+    }
+  }
+}

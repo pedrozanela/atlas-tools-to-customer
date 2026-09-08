@@ -1,0 +1,90 @@
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { LayoutGrid, History, Shield, LogOut, Compass, Map, HelpCircle } from 'lucide-react'
+import { useAuth } from '@/context/AuthContext'
+import { useTheme } from '@/context/ThemeContext'
+import { useT } from '@/i18n'
+import LanguageSwitcher from '@/components/LanguageSwitcher'
+import ColorModeToggle from '@/components/ColorModeToggle'
+import MobileNav from '@/components/MobileNav'
+import MobileMenu from '@/components/MobileMenu'
+import Tour, { useTour } from '@/components/Tour'
+import AtlasBackLink from '@/components/AtlasBackLink'
+import './Layout.css'
+
+export default function Layout() {
+  const location = useLocation()
+  const { user, logout } = useAuth()
+  const { theme } = useTheme()
+  const t = useT()
+  const { open: tourOpen, openTour, closeTour } = useTour()
+
+  return (
+    <div className="gc-layout">
+      <header className="gc-header">
+        <div className="gc-brand-group">
+          <AtlasBackLink compact />
+          <Link to="/" className="gc-brand">
+            {theme?.logo_url
+              ? <img src={theme.logo_url} alt={theme.name} className="gc-logo-img" />
+              : <span className="gc-brand-name">People & Training</span>}
+          </Link>
+        </div>
+
+        <nav className="gc-nav" aria-label={t('nav.mainNav')}>
+          <NavLink to="/" end data-tour="program" data-atlas-tour="people-program" className={({ isActive }) => isActive ? 'active' : ''}>
+            <Compass size={16} /> {t('nav.program')}
+          </NavLink>
+          <NavLink to="/rutas" data-tour="routes" data-atlas-tour="people-routes" className={({ isActive }) => isActive ? 'active' : ''}>
+            <Map size={16} /> {t('nav.routes')}
+          </NavLink>
+          <NavLink to="/simulacros" data-tour="practice" data-atlas-tour="people-practice" className={({ isActive }) => isActive ? 'active' : ''}>
+            <LayoutGrid size={16} /> {t('nav.simulacros')}
+          </NavLink>
+          <NavLink to="/historico" data-tour="history" data-atlas-tour="people-history" className={({ isActive }) => isActive ? 'active' : ''}>
+            <History size={16} /> {t('nav.myHistory')}
+          </NavLink>
+          {user?.is_admin && (
+            <NavLink to="/admin" data-tour="admin" data-atlas-tour="people-admin" className={({ isActive }) => isActive ? 'active' : ''}>
+              <Shield size={16} /> {t('nav.admin')}
+            </NavLink>
+          )}
+        </nav>
+
+        <div className="gc-header-right" data-tour="settings">
+          <button className="tour-trigger" data-tour="help" data-atlas-tour="people-help" onClick={openTour} title={t('tour.title')}>
+            <HelpCircle size={16} />
+            <span className="tour-trigger-label">{t('tour.open')}</span>
+          </button>
+          <ColorModeToggle />
+          <LanguageSwitcher compact />
+          {user && (
+            <>
+              <span className="gc-user" title={user.email}>{user.name}</span>
+              <button className="gc-logout" onClick={logout} title={t('nav.logout')}>
+                <LogOut size={17} />
+              </button>
+            </>
+          )}
+        </div>
+
+        <MobileMenu />
+      </header>
+
+      <main className="gc-main">
+        {location.pathname.startsWith('/cert/') && (
+          <Link to="/simulacros" className="gc-back">{t('nav.allCerts')}</Link>
+        )}
+        <div className="gc-content page">
+          <Outlet />
+        </div>
+      </main>
+
+      <footer className="gc-footer">
+        {t('nav.footer', { name: theme?.name ?? 'People & Training' })}
+      </footer>
+
+      <MobileNav />
+      {tourOpen && <Tour open onClose={closeTour} isAdmin={Boolean(user?.is_admin)} />}
+    </div>
+  )
+}
