@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --config frontend/vite.config.ts",
-    "build": "npm run typecheck && vite build --config frontend/vite.config.ts",
+    "build": "vite build --config frontend/vite.config.ts",
     "lint": "npm run typecheck",
     "typecheck": "tsc -p frontend/tsconfig.json --noEmit",
     "test": "vitest run --config frontend/vitest.config.ts",

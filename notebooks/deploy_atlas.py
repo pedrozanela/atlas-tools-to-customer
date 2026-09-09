@@ -982,6 +982,17 @@ def configure_lakebase_role(
                     sql.Identifier(role),
                 )
             )
+            # Certifica's startup seed runs `CREATE SCHEMA IF NOT EXISTS`, whose
+            # database CREATE-privilege check precedes the IF NOT EXISTS branch —
+            # so `role` needs CREATE on the database even though the schema was
+            # already created above. Without this the People module crashes at
+            # boot with "permission denied for database".
+            cur.execute(
+                sql.SQL("GRANT CREATE ON DATABASE {} TO {}").format(
+                    sql.Identifier(database_name),
+                    sql.Identifier(role),
+                )
+            )
             try:
                 cur.execute(sql.SQL("GRANT {} TO CURRENT_USER").format(sql.Identifier(role)))
             except Exception:
