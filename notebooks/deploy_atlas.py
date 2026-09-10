@@ -435,6 +435,13 @@ def ensure_uc(warehouse_id: str, cfg: DeployConfig) -> None:
         warehouse_id,
         f"CREATE SCHEMA IF NOT EXISTS {sql_ident(cfg.uc_catalog)}.{sql_ident(cfg.uc_schema)}",
     )
+    # MOMA persists its dm_* tables in a dedicated `moma` schema (the supervisor
+    # sets UC_SCHEMA=moma for that process). Upstream deploy omits it; create it
+    # so MOMA can save assessments instead of degrading to read-only.
+    run_sql(
+        warehouse_id,
+        f"CREATE SCHEMA IF NOT EXISTS {sql_ident(cfg.uc_catalog)}.{sql_ident('moma')}",
+    )
 
 
 def ensure_lakebase_project(
@@ -1390,6 +1397,8 @@ def runtime_source_files(work_dir: Path) -> list[Path]:
         Path("package.json"),
         Path("requirements.txt"),
         Path("apps/people/backend/requirements.txt"),
+        Path("apps/moma/backend/requirements.txt"),
+        Path("apps/moma/backend/app.py"),
         Path("scripts/start-databricks-app.mjs"),
     ]
     for app_name in ATLAS_APPS:
@@ -1425,6 +1434,38 @@ def runtime_source_files(work_dir: Path) -> list[Path]:
                 included += 1
         if included == 0:
             fail(f"People runtime directory has no publishable files: {runtime_dir}")
+
+    # MOMA (Maturity & Operating Model Assessment): FastAPI + built SPA, served
+    # under /moma by the supervisor. Upstream bundle_vars/publish logic omits it,
+    # so pip fails on the missing apps/moma/backend/requirements.txt. Publish its
+    # server package and built frontend (the "frontend" part is NOT excluded here,
+    # unlike People, because MOMA ships its SPA under frontend/dist).
+    for runtime_dir in [
+        Path("apps/moma/backend/server"),
+        Path("apps/moma/backend/frontend/dist"),
+    ]:
+        source_dir = work_dir / runtime_dir
+        if not source_dir.is_dir() or source_dir.is_symlink():
+            fail(f"Missing or unsafe MOMA runtime directory: {runtime_dir}")
+        included = 0
+        for source in sorted(source_dir.rglob("*")):
+            relative_path = source.relative_to(work_dir)
+            if source.is_symlink():
+                fail(f"Symlink is not allowed in MOMA runtime source: {relative_path}")
+            relative_under_root = source.relative_to(source_dir)
+            if (
+                any(
+                    part.lower() == "__pycache__" or part.startswith(".")
+                    for part in relative_under_root.parts
+                )
+                or source.suffix.lower() in PEOPLE_RUNTIME_EXCLUDED_SUFFIXES
+            ):
+                continue
+            if source.is_file():
+                relative_files.append(relative_path)
+                included += 1
+        if included == 0:
+            fail(f"MOMA runtime directory has no publishable files: {runtime_dir}")
 
     relative_files = sorted(set(relative_files), key=lambda path: path.as_posix())
 
@@ -2378,6 +2419,9 @@ def grant_tap_privileges(warehouse_id: str, cfg: DeployConfig, sp_id: str) -> No
         f"GRANT USE CATALOG ON CATALOG {sql_ident(cfg.uc_catalog)} TO `{principal}`",
         f"GRANT USE SCHEMA ON SCHEMA {sql_ident(cfg.uc_catalog)}.{sql_ident(cfg.uc_schema)} TO `{principal}`",
         f"GRANT CREATE TABLE, MODIFY ON SCHEMA {sql_ident(cfg.uc_catalog)}.{sql_ident(cfg.uc_schema)} TO `{principal}`",
+        # MOMA writes its dm_* tables into the `moma` schema (see ensure_uc).
+        f"GRANT USE SCHEMA ON SCHEMA {sql_ident(cfg.uc_catalog)}.{sql_ident('moma')} TO `{principal}`",
+        f"GRANT CREATE TABLE, MODIFY ON SCHEMA {sql_ident(cfg.uc_catalog)}.{sql_ident('moma')} TO `{principal}`",
     ]
     for statement in statements:
         run_sql(warehouse_id, statement)
@@ -2695,6 +2739,11 @@ bundle_vars = {
     "uc_catalog": CONFIG.uc_catalog,
     "uc_schema": CONFIG.uc_schema,
     "uc_table": CONFIG.uc_table,
+    # MOMA module reads UC_CATALOG/UC_SCHEMA at runtime; this var only satisfies
+    # app.yaml's ${var.moma_uc_catalog} template. Reuses the TAP catalog (MOMA
+    # writes its dm_* tables into the same uc_schema, where the app SP already
+    # holds CREATE TABLE/MODIFY). Missing from upstream bundle_vars → render fail.
+    "moma_uc_catalog": CONFIG.uc_catalog,
     "certifica_pg_schema": CONFIG.certifica_pg_schema,
     "certifica_llm_endpoint": CONFIG.certifica_llm_endpoint,
     "certifica_sso_enabled": str(CONFIG.certifica_sso_enabled).lower(),
