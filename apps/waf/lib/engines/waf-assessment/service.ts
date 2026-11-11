@@ -29,6 +29,7 @@ import type {
   WafQualitativeResponse,
 } from "./types";
 import { QUALITATIVE_SCORE, QUALITATIVE_THRESHOLD, WAF_PILLARS } from "./types";
+import { workspaceScopeLabel } from "@/lib/dbx/system-scope";
 
 const QUALITATIVE_ANSWERS: ReadonlySet<WafQualitativeAnswer> = new Set([
   "yes",
@@ -104,7 +105,8 @@ export async function runAssessment(opts: {
         assessmentId,
         ownerEmail: opts.ownerEmail ?? null,
         status: "running",
-        scope: opts.scope ?? null,
+        // The admin-configured workspace selection wins over any client label.
+        scope: workspaceScopeLabel() ?? opts.scope ?? null,
         triggeredBy: opts.triggeredBy ?? null,
       },
     }),

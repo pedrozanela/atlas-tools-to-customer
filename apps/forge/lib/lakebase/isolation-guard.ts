@@ -1,26 +1,25 @@
 /**
- * Startup guard: refuses to boot if any root table contains rows with
+ * Startup guard: reports root tables that contain rows with
  * `owner_email IS NULL`.
  *
- * Per the User Isolation refactor, every root model has a NOT NULL
- * `ownerEmail` column. The Prisma migration is forward-only and assumes
- * the database has been wiped before deploy. This guard is a defensive
- * check -- if a botched migration leaves null owners behind, we want a
- * loud failure rather than silent invisible orphan rows.
+ * Every owner-scoped read filters by `ownerEmail` (see
+ * lib/config/isolation-flag.ts), so a row without an owner is invisible to
+ * all users -- never leaked. Inside Atlas the Forge zone runs under a shared
+ * supervisor that stops every module when one exits, so this guard repairs
+ * what it can and logs the rest instead of failing the boot: one orphaned
+ * row used to take the whole suite down on its next restart.
  *
- * Tables checked: every root model declared with `ownerEmail` in
- * `prisma/schema.prisma`. Children inherit visibility via their parent
- * FK and don't need a direct check.
+ * Repair: comment jobs created by the pipeline before their owner was
+ * recorded inherit it from the run (or scan) they belong to.
  *
- * Behaviour:
- *   - If `FORGE_USER_ISOLATION=false`, the guard logs a warning and
- *     allows boot to proceed (escape hatch for emergency deploys).
- *   - Otherwise, finding any null-owner rows throws and the process
- *     exits.
+ * Tables checked: root models whose reads are filtered by `ownerEmail`.
+ * Children inherit visibility through their parent FK. Space health scores,
+ * benchmark runs and Metadata Genie spaces are not checked: their writers
+ * never record an owner and their reads are keyed by space/id, not owner.
  */
 
+import type { PrismaClient } from "@/lib/generated/prisma/client";
 import { withPrisma } from "@/lib/prisma";
-import { isUserIsolationEnabled } from "@/lib/config/isolation-flag";
 import { logger } from "@/lib/logger";
 
 interface RootTableCheck {
@@ -28,11 +27,58 @@ interface RootTableCheck {
   count: () => Promise<number>;
 }
 
+/** Give owner-less comment jobs the owner of their run or scan. */
+async function backfillCommentJobOwners(prisma: PrismaClient): Promise<number> {
+  const orphans = await prisma.forgeCommentJob.findMany({
+    where: { ownerEmail: null, OR: [{ runId: { not: null } }, { scanId: { not: null } }] },
+    select: { id: true, runId: true, scanId: true },
+  });
+  if (orphans.length === 0) return 0;
+
+  const runIds = [...new Set(orphans.map((o) => o.runId).filter((id): id is string => !!id))];
+  const scanIds = [...new Set(orphans.map((o) => o.scanId).filter((id): id is string => !!id))];
+  const [runs, scans] = await Promise.all([
+    runIds.length
+      ? prisma.forgeRun.findMany({
+          where: { runId: { in: runIds }, ownerEmail: { not: null } },
+          select: { runId: true, ownerEmail: true },
+        })
+      : [],
+    scanIds.length
+      ? prisma.forgeEnvironmentScan.findMany({
+          where: { scanId: { in: scanIds }, ownerEmail: { not: null } },
+          select: { scanId: true, ownerEmail: true },
+        })
+      : [],
+  ]);
+  const runOwner = new Map(runs.map((r) => [r.runId, r.ownerEmail as string]));
+  const scanOwner = new Map(scans.map((s) => [s.scanId, s.ownerEmail as string]));
+
+  let repaired = 0;
+  for (const job of orphans) {
+    const owner =
+      (job.runId && runOwner.get(job.runId)) || (job.scanId && scanOwner.get(job.scanId));
+    if (!owner) continue;
+    await prisma.forgeCommentJob.update({ where: { id: job.id }, data: { ownerEmail: owner } });
+    repaired += 1;
+  }
+  return repaired;
+}
+
 export async function assertOwnerEmailIntegrity(): Promise<void> {
   const counts = await withPrisma(async (prisma) => {
-    // Each row is a root model that the isolation refactor added an owner to.
-    // Children (use cases, exports, prompt logs, ...) cascade through their
-    // parents via FK and aren't checked directly.
+    try {
+      const repaired = await backfillCommentJobOwners(prisma);
+      if (repaired > 0) {
+        logger.warn("[isolation-guard] Back-filled owner_email on comment jobs", { repaired });
+      }
+    } catch (err) {
+      // Table may not exist yet on a fresh deploy -- the count below reports it.
+      logger.debug("[isolation-guard] Comment job owner back-fill skipped", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     const checks: RootTableCheck[] = [
       { label: "ForgeRun", count: () => prisma.forgeRun.count({ where: { ownerEmail: null } }) },
       {
@@ -42,19 +88,6 @@ export async function assertOwnerEmailIntegrity(): Promise<void> {
       {
         label: "ForgeGenieSpace",
         count: () => prisma.forgeGenieSpace.count({ where: { ownerEmail: null } }),
-      },
-      {
-        label: "ForgeMetadataGenieSpace",
-        count: () =>
-          prisma.forgeMetadataGenieSpace.count({ where: { ownerEmail: null } }),
-      },
-      {
-        label: "ForgeSpaceBenchmarkRun",
-        count: () => prisma.forgeSpaceBenchmarkRun.count({ where: { ownerEmail: null } }),
-      },
-      {
-        label: "ForgeSpaceHealthScore",
-        count: () => prisma.forgeSpaceHealthScore.count({ where: { ownerEmail: null } }),
       },
       {
         label: "ForgeDemoSession",
@@ -108,20 +141,9 @@ export async function assertOwnerEmailIntegrity(): Promise<void> {
   }
 
   const summary = counts.map((c) => `  - ${c.label}: ${c.count} rows`).join("\n");
-  const message =
-    `Startup integrity check failed: rows with NULL owner_email found.\n${summary}\n\n` +
-    `These rows are invisible to all users under the per-user isolation model.\n` +
-    `Run a factory reset (deleteAllData()) and re-deploy, or back-fill the\n` +
-    `owner_email column manually before flipping FORGE_USER_ISOLATION on.`;
-
-  if (!isUserIsolationEnabled()) {
-    logger.warn(`[isolation-guard] ${message}\nFORGE_USER_ISOLATION=false; allowing boot.`);
-    return;
-  }
-
-  // Loud, fatal failure. The process will exit so the platform retries
-  // the deploy with a clear error message instead of silently corrupting
-  // visibility.
-  logger.error(`[isolation-guard] ${message}`);
-  throw new Error(message);
+  logger.error(
+    `[isolation-guard] Rows with NULL owner_email found:\n${summary}\n\n` +
+      `They stay invisible to every user (owner filters always apply). Back-fill ` +
+      `owner_email to make them visible again. Boot continues.`,
+  );
 }

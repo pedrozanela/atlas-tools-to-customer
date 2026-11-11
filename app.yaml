@@ -24,6 +24,15 @@ env:
   # User authorization is intentionally restricted to the WAF zone.
   - name: WAF_DATABRICKS_AUTH_MODE
     value: "obo"
+  # Workspace scope (set by the deploy notebook). When the admin selects
+  # workspaces, every system-table read in every module goes through filtered
+  # views in this "<catalog>.<schema>". Empty = read system.* directly (all
+  # workspaces in the account).
+  - name: ATLAS_SYSTEM_SCOPE_SCHEMA
+    value: "${var.atlas_system_scope_schema}"
+  # Human-readable description of that selection, shown in reports.
+  - name: ATLAS_WORKSPACE_SCOPE
+    value: "${var.atlas_workspace_scope}"
 
   # Shared identity injection — Databricks Apps proxy already sets
   # x-forwarded-email; this is the local-dev fallback used when running the

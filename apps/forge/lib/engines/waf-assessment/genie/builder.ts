@@ -17,6 +17,7 @@ import type {
   SerializedSpace,
   TextInstruction,
 } from "@/lib/genie/types";
+import { scopeSystemTableNames, scopeSystemTables } from "@/lib/dbx/system-scope";
 
 export const WAF_GENIE_TITLE = "Forge WAF Genie";
 export const WAF_GENIE_DESCRIPTION =
@@ -177,24 +178,30 @@ WHERE table_type IN ('MANAGED', 'EXTERNAL')
  * The Genie API will further sanitise it (`sanitizeSerializedSpace`).
  */
 export function buildWafGenieSpace(locale?: string): SerializedSpace {
+  // Workspace scoping: attach the admin-selected views instead of system.*,
+  // and point instructions/examples at them so the Agent never queries the
+  // unfiltered tables.
   const tables: DataSourceTable[] = TABLES.map((t) => ({
-    identifier: t.identifier,
-    description: [t.description],
+    identifier: scopeSystemTableNames(t.identifier),
+    description: [scopeSystemTableNames(t.description)],
   }));
 
   const textInstructions: TextInstruction[] = [
-    { id: newId(), content: [languageDirective(locale) + TEXT_INSTRUCTION] },
+    {
+      id: newId(),
+      content: [scopeSystemTableNames(languageDirective(locale) + TEXT_INSTRUCTION)],
+    },
   ];
 
   const sampleQuestions: SampleQuestion[] = SAMPLE_QUESTIONS.map((q) => ({
     id: newId(),
-    question: [q],
+    question: [scopeSystemTableNames(q)],
   }));
 
   const exampleSqls: ExampleQuestionSql[] = EXAMPLE_SQLS.map((e) => ({
     id: newId(),
-    question: [e.question],
-    sql: [e.sql],
+    question: [scopeSystemTableNames(e.question)],
+    sql: [scopeSystemTables(e.sql)],
   }));
 
   return {

@@ -224,6 +224,7 @@ function downloadCsv(latest: WafAssessmentDetail): void {
     "threshold_percentage",
     "met",
     "recommendation",
+    "assessment_scope",
   ];
   // Cells starting with these characters are interpreted as formulas by
   // Excel/Sheets/Numbers — prefix with a single quote to neutralise.
@@ -242,6 +243,7 @@ function downloadCsv(latest: WafAssessmentDetail): void {
       r.thresholdPercentage.toFixed(0),
       r.thresholdMet ? "yes" : "no",
       r.control.recommendationIfNotMet ?? "",
+      latest.scope ?? "all workspaces",
     ]
       .map((v) => escape(String(v)))
       .join(","),
@@ -800,6 +802,9 @@ function ScoreOverview({
             })}{" "}
             · {tOverview("last_run_pre")}{" "}
             {l10n.dateTime(summary.completedAt ?? summary.createdAt)}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {tOverview("scope_label")}: {summary.scope || tOverview("scope_all")}
           </p>
         </CardContent>
       </Card>

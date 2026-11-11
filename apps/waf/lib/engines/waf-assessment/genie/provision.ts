@@ -11,6 +11,7 @@ import { logger } from "@/lib/logger";
 import {
   WAF_GENIE_TITLE,
   LEGACY_WAF_GENIE_DESCRIPTION,
+  isWafGenieTitle,
   buildWafGenieSerializedSpace,
   getSpOwnedWafGenieDescription,
   getWafGenieDescription,
@@ -40,7 +41,7 @@ async function findWafGenieSpaceId(oboToken: string): Promise<string | null> {
   do {
     const page = await listGenieSpaces(100, pageToken, oboToken);
     for (const candidate of page.spaces ?? []) {
-      if (candidate.title !== WAF_GENIE_TITLE) continue;
+      if (!isWafGenieTitle(candidate.title)) continue;
       const live = await getGenieSpace(candidate.space_id, oboToken);
       const parentPath = live.parent_path?.replace(/\/?$/, "/");
       if (!acceptedDescriptions.has(live.description ?? "")) continue;
@@ -107,8 +108,9 @@ async function provisionWafGenieSpace(input: {
       });
     }
 
+    // Title is set at creation only: re-sending it could collide with another
+    // Atlas app's Agent in the same folder.
     const result = await updateGenieSpace(existingId, {
-      title: WAF_GENIE_TITLE,
       description,
       serializedSpace,
       warehouseId: config.warehouseId,

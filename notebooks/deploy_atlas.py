@@ -51,6 +51,7 @@ DEFAULTS = {
     "prebuilt_artifact_url": "",
     "run_app": "true",
     "smoke_test": "true",
+    "workspace_scope": "",
 }
 
 WIDGET_LABELS = {
@@ -78,6 +79,7 @@ WIDGET_LABELS = {
     "prebuilt_artifact_url": "Prebuilt deploy artifact URL",
     "run_app": "Start app after deploy",
     "smoke_test": "Smoke-test routes after deploy",
+    "workspace_scope": "Workspaces to analyze (IDs or names, comma-separated; blank = all)",
 }
 
 DROPDOWN_WIDGETS = {
@@ -238,6 +240,15 @@ CONFIG = DeployConfig(
     prebuilt_artifact_url=widget("prebuilt_artifact_url"),
     run_app=as_bool(widget("run_app")),
     smoke_test=as_bool(widget("smoke_test")),
+)
+
+# Workspace scope: IDs or names of the workspaces Atlas may analyse. They are
+# resolved against system.access.workspaces_latest once a warehouse is chosen,
+# before any resource is created. Blank keeps the account-wide behaviour.
+WORKSPACE_SCOPE_ENTRIES = list(
+    dict.fromkeys(
+        item.strip() for item in widget("workspace_scope").split(",") if item.strip()
+    )
 )
 
 validate_lakebase_compute(
@@ -442,6 +453,220 @@ def ensure_uc(warehouse_id: str, cfg: DeployConfig) -> None:
         warehouse_id,
         f"CREATE SCHEMA IF NOT EXISTS {sql_ident(cfg.uc_catalog)}.{sql_ident('moma')}",
     )
+
+
+# Keep in sync with SCOPED_SYSTEM_TABLES in apps/{waf,forge}/lib/dbx/system-scope.ts:
+# every system table Atlas reads that carries a workspace_id column.
+SCOPED_SYSTEM_TABLES = (
+    "access.audit",
+    "access.table_lineage",
+    "billing.usage",
+    "compute.clusters",
+    "compute.node_timeline",
+    "compute.warehouse_events",
+    "compute.warehouses",
+    "lakeflow.job_run_timeline",
+    "lakeflow.jobs",
+    "lakeflow.pipelines",
+    "query.history",
+)
+WORKSPACE_SCOPE_TABLE = "workspace_scope"
+WORKSPACE_SCOPE_MARKER = "Atlas workspace scope (managed by deploy_atlas)"
+MAX_SCOPE_LABEL_WORKSPACES = 20
+
+
+def sql_literal(value: str) -> str:
+    # Databricks SQL: backslash escapes; '' would concatenate two literals.
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def workspace_scope_schema(app_name: str) -> str:
+    return re.sub(r"[^a-z0-9_]", "_", app_name.lower()) + "_system"
+
+
+def scoped_view_name(system_table: str) -> str:
+    return system_table.replace(".", "_")
+
+
+def resolve_workspace_scope(warehouse_id: str, entries: list[str]) -> list[tuple[str, str]]:
+    """Resolve IDs/names to (workspace_id, workspace_name); fail on unknown or ambiguous."""
+    if not entries:
+        return []
+    ids = [entry for entry in entries if entry.isdigit()]
+    names = [entry.lower() for entry in entries if not entry.isdigit()]
+    predicates = []
+    if ids:
+        predicates.append("workspace_id IN (" + ", ".join(sql_literal(i) for i in ids) + ")")
+    if names:
+        predicates.append(
+            "lower(workspace_name) IN (" + ", ".join(sql_literal(n) for n in names) + ")"
+        )
+    try:
+        result = run_sql(
+            warehouse_id,
+            "SELECT workspace_id, workspace_name FROM system.access.workspaces_latest WHERE "
+            + " OR ".join(predicates),
+        )
+    except Exception as exc:
+        if names:
+            fail(
+                "Could not read system.access.workspaces_latest to resolve workspace names "
+                f"({exc}). Grant SELECT on system.access to the deploying user, or use "
+                "numeric workspace IDs in `workspace_scope`."
+            )
+        print(
+            "WARN: could not read system.access.workspaces_latest "
+            f"({exc}); using the workspace IDs as given."
+        )
+        return [(workspace_id, workspace_id) for workspace_id in ids]
+
+    rows = (result.get("result") or {}).get("data_array") or []
+    by_id = {str(row[0]): str(row[1] or row[0]) for row in rows}
+    by_name: dict[str, list[str]] = {}
+    for workspace_id, workspace_name in by_id.items():
+        by_name.setdefault(workspace_name.lower(), []).append(workspace_id)
+
+    resolved: dict[str, str] = {}
+    problems: list[str] = []
+    for entry in entries:
+        if entry.isdigit():
+            if entry in by_id:
+                resolved[entry] = by_id[entry]
+            else:
+                problems.append(f"workspace ID {entry} not found in this account")
+            continue
+        matches = sorted(by_name.get(entry.lower(), []))
+        if len(matches) == 1:
+            resolved[matches[0]] = by_id[matches[0]]
+        elif not matches:
+            problems.append(f"workspace name {entry!r} not found")
+        else:
+            problems.append(
+                f"workspace name {entry!r} is ambiguous (IDs: {', '.join(matches)}); use the ID"
+            )
+    if problems:
+        fail("Invalid `workspace_scope`: " + "; ".join(problems))
+    return sorted(resolved.items(), key=lambda item: (item[1].lower(), item[0]))
+
+
+def workspace_scope_label(scope: list[tuple[str, str]]) -> str:
+    if not scope:
+        return ""
+    shown = [f"{name} ({workspace_id})" for workspace_id, name in scope[:MAX_SCOPE_LABEL_WORKSPACES]]
+    more = len(scope) - len(shown)
+    label = f"{len(scope)} workspace(s): " + ", ".join(shown)
+    if more > 0:
+        label += f", +{more} more"
+    # Rendered inside a double-quoted YAML value in app.yaml.
+    return re.sub(r'["\\\r\n]', "", label)
+
+
+def scope_schema_comment(warehouse_id: str, catalog: str, schema: str) -> str | None:
+    """None when the schema does not exist, else its comment ('' when unset)."""
+    result = run_sql(
+        warehouse_id,
+        f"SELECT comment FROM {sql_ident(catalog)}.information_schema.schemata "
+        f"WHERE schema_name = {sql_literal(schema)}",
+    )
+    rows = (result.get("result") or {}).get("data_array") or []
+    if not rows:
+        return None
+    return rows[0][0] or ""
+
+
+def ensure_workspace_scope(
+    warehouse_id: str,
+    catalog: str,
+    schema: str,
+    scope: list[tuple[str, str]],
+) -> bool:
+    """Create/refresh the filtered views; return True when Atlas must read them.
+
+    No scope means no views: the app keeps reading system.* exactly as before,
+    and any views left from a previous scoped deploy are removed.
+    """
+    fq_schema = f"{sql_ident(catalog)}.{sql_ident(schema)}"
+    existing_comment = scope_schema_comment(warehouse_id, catalog, schema)
+    if existing_comment is not None and not existing_comment.startswith(WORKSPACE_SCOPE_MARKER):
+        fail(
+            f"Schema {catalog}.{schema} already exists and is not managed by Atlas; refusing "
+            "to create workspace-scope views in it. Use a different `app_name` or drop that schema."
+        )
+
+    if not scope:
+        if existing_comment is None:
+            print("Workspace scope: none. Atlas reads every workspace in the account (system.*).")
+            return False
+        for system_table in SCOPED_SYSTEM_TABLES:
+            run_sql(
+                warehouse_id,
+                f"DROP VIEW IF EXISTS {fq_schema}.{sql_ident(scoped_view_name(system_table))}",
+            )
+        run_sql(warehouse_id, f"DROP TABLE IF EXISTS {fq_schema}.{sql_ident(WORKSPACE_SCOPE_TABLE)}")
+        try:
+            run_sql(warehouse_id, f"DROP SCHEMA IF EXISTS {fq_schema} RESTRICT")
+        except Exception as exc:
+            print(f"WARN: kept non-empty schema {catalog}.{schema}: {exc}")
+        print("Workspace scope cleared: Atlas reads every workspace in the account (system.*) again.")
+        return False
+
+    run_sql(
+        warehouse_id,
+        f"CREATE SCHEMA IF NOT EXISTS {fq_schema} COMMENT {sql_literal(WORKSPACE_SCOPE_MARKER)}",
+    )
+    run_sql(
+        warehouse_id,
+        f"CREATE OR REPLACE TABLE {fq_schema}.{sql_ident(WORKSPACE_SCOPE_TABLE)} "
+        "(workspace_id STRING NOT NULL, workspace_name STRING) "
+        f"COMMENT {sql_literal(WORKSPACE_SCOPE_MARKER + ': workspaces Atlas analyses')}",
+    )
+    run_sql(
+        warehouse_id,
+        f"INSERT INTO {fq_schema}.{sql_ident(WORKSPACE_SCOPE_TABLE)} VALUES "
+        + ", ".join(f"({sql_literal(wid)}, {sql_literal(name)})" for wid, name in scope),
+    )
+    # The ID list is written into each view (not read from the table above) so
+    # that emptying the table can never silently widen Atlas to the whole account.
+    id_list = ", ".join(sql_literal(workspace_id) for workspace_id, _ in scope)
+    for system_table in SCOPED_SYSTEM_TABLES:
+        run_sql(
+            warehouse_id,
+            f"CREATE OR REPLACE VIEW {fq_schema}.{sql_ident(scoped_view_name(system_table))} "
+            f"WITH SCHEMA EVOLUTION COMMENT {sql_literal(WORKSPACE_SCOPE_MARKER)} AS "
+            f"SELECT * FROM system.{system_table} WHERE workspace_id IN ({id_list})",
+        )
+    print(
+        f"Workspace scope: {len(SCOPED_SYSTEM_TABLES)} views in {catalog}.{schema} limited to "
+        + ", ".join(f"{name} ({wid})" for wid, name in scope)
+    )
+    return True
+
+
+def grant_workspace_scope_privileges(
+    warehouse_id: str, catalog: str, schema: str, sp_id: str
+) -> None:
+    fq_schema = f"{sql_ident(catalog)}.{sql_ident(schema)}"
+    principal = sp_id.replace("`", "``")
+    for statement in (
+        f"GRANT USE SCHEMA ON SCHEMA {fq_schema} TO `{principal}`",
+        f"GRANT SELECT ON SCHEMA {fq_schema} TO `{principal}`",
+    ):
+        run_sql(warehouse_id, statement)
+
+
+def workspace_scope_manifest(
+    catalog: str, schema: str, scope: list[tuple[str, str]]
+) -> dict[str, Any] | None:
+    if not scope:
+        return None
+    return {
+        "catalog": catalog,
+        "schema": schema,
+        "table": WORKSPACE_SCOPE_TABLE,
+        "views": [scoped_view_name(t) for t in SCOPED_SYSTEM_TABLES],
+        "marker": WORKSPACE_SCOPE_MARKER,
+        "workspace_ids": [workspace_id for workspace_id, _ in scope],
+    }
 
 
 def ensure_lakebase_project(
@@ -1365,6 +1590,16 @@ ATLAS_RETIRED_RESOURCE_NAMES = {
     "pbi-llm-endpoint",
 }
 WAF_GENIE_TITLE = "Forge WAF Genie"
+WAF_GENIE_TITLE_SUFFIX = re.compile(r" \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+
+def is_waf_genie_title(title: Any) -> bool:
+    """The workspace appends a timestamp when the name collides in the folder."""
+    if not isinstance(title, str):
+        return False
+    return title == WAF_GENIE_TITLE or (
+        title.startswith(WAF_GENIE_TITLE) and bool(WAF_GENIE_TITLE_SUFFIX.fullmatch(title[len(WAF_GENIE_TITLE):]))
+    )
 WAF_GENIE_ALLOWED_PARENT_PATHS = [
     "/Shared/Forge Genie Spaces/",
     "/Shared/",
@@ -1669,6 +1904,7 @@ def build_destroy_config(
     release_fingerprint: str | None = None,
     deployment_id: str | None = None,
     lakebase_project_created: bool = False,
+    workspace_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     user_segment = workspace_user_path_segment(workspace_user)
     config_path = destroy_config_workspace_path(workspace_user, cfg.app_name)
@@ -1736,6 +1972,7 @@ def build_destroy_config(
             "drop_schema_if_empty": True,
             "drop_catalog_if_empty": True,
         },
+        **({"workspace_scope": workspace_scope} if workspace_scope else {}),
         "workspace_source": {
             "release_root": (
                 f"/Users/{user_segment}/.atlas/releases/{cfg.app_name}"
@@ -2480,7 +2717,7 @@ def retire_legacy_waf_genie_agent(
         candidates.extend(
             item
             for item in page.get("spaces", [])
-            if isinstance(item, dict) and item.get("title") == WAF_GENIE_TITLE
+            if isinstance(item, dict) and is_waf_genie_title(item.get("title"))
         )
         page_token = page.get("next_page_token")
         if not page_token:
@@ -2516,9 +2753,31 @@ def retire_legacy_waf_genie_agent(
             if not has_direct_manage_permission(
                 permissions, "user_name", owner_user_name
             ):
-                fail(
-                    f"Refusing to accept current WAF OBO Genie Agent `{space_id}` "
-                    "because its ACL does not prove deployer ownership."
+                # The app creates its Agent in a shared folder, where the creator
+                # only inherits the folder ACL, so re-runs (e.g. to change the
+                # workspace scope) used to stop here. The description names this
+                # app (unique per workspace); being allowed to grant CAN_MANAGE
+                # proves the deployer already manages the Agent.
+                try:
+                    dbx_api(
+                        "PATCH",
+                        f"/api/2.0/permissions/genie/{encoded_id}",
+                        {
+                            "access_control_list": [
+                                {"user_name": owner_user_name, "permission_level": "CAN_MANAGE"}
+                            ]
+                        },
+                    )
+                except DbxApiError as err:
+                    fail(
+                        f"Refusing to accept current WAF OBO Genie Agent `{space_id}` "
+                        f"because {owner_user_name} cannot manage it ({err}). Ask its owner to "
+                        f"share it ({DATABRICKS_HOST}/genie/rooms/{space_id}) with Can Manage, "
+                        "or delete it and re-run."
+                    )
+                print(
+                    f"Granted {owner_user_name} CAN_MANAGE directly on this app's "
+                    f"WAF Genie Agent `{space_id}`."
                 )
             legacy_matches.append((space_id, "current_obo"))
         elif has_direct_manage_permission(
@@ -2642,6 +2901,11 @@ ensure_basic_tools()
 
 warehouse_id = choose_warehouse(CONFIG.warehouse_id)
 workspace_user = current_workspace_user()
+WORKSPACE_SCOPE_SCHEMA = workspace_scope_schema(CONFIG.app_name)
+WORKSPACE_SCOPE = resolve_workspace_scope(warehouse_id, WORKSPACE_SCOPE_ENTRIES)
+WORKSPACE_SCOPE_MANIFEST = workspace_scope_manifest(
+    CONFIG.uc_catalog, WORKSPACE_SCOPE_SCHEMA, WORKSPACE_SCOPE
+)
 CERTIFICA_SUPERADMIN_EMAILS = CONFIG.certifica_superadmin_emails or workspace_user
 validate_certifica_config(
     CONFIG.certifica_pg_schema,
@@ -2657,9 +2921,13 @@ DESTROY_CONFIG = build_destroy_config(
     cfg=CONFIG,
     workspace_user=workspace_user,
     warehouse_id=warehouse_id,
+    workspace_scope=WORKSPACE_SCOPE_MANIFEST,
 )
 DESTROY_CONFIG_PATH = persist_destroy_config(DESTROY_CONFIG)
 ensure_uc(warehouse_id, CONFIG)
+WORKSPACE_SCOPE_ENABLED = ensure_workspace_scope(
+    warehouse_id, CONFIG.uc_catalog, WORKSPACE_SCOPE_SCHEMA, WORKSPACE_SCOPE
+)
 validate_prebuilt_artifacts(work_dir)
 
 lakebase_project = ensure_lakebase_project(
@@ -2720,6 +2988,20 @@ apply_lakebase_schema_bootstrap(
     "atlas-admin",
 )
 
+# Fresh-deploy fix: the bootstrap above CREATEs the forge/waf/mas tables as the
+# deployer's Postgres role (admin_url connects as workspace_user), so on a clean
+# deploy atlas-admin is NOT their owner and the app 500s with
+# "must be owner of table ..." (SQLSTATE 42501) on its first DDL migration.
+# The first configure_lakebase_role ran before the tables existed, so it had
+# nothing to reassign. Re-run the idempotent reconcile now that the tables exist
+# to hand their ownership to atlas-admin.
+configure_lakebase_role(
+    admin_url,
+    database_name,
+    "atlas-admin",
+    native_password,
+)
+
 print("Using prebuilt standalone bundle chunks from the downloaded artifact.")
 
 bundle_vars = {
@@ -2744,6 +3026,10 @@ bundle_vars = {
     # writes its dm_* tables into the same uc_schema, where the app SP already
     # holds CREATE TABLE/MODIFY). Missing from upstream bundle_vars → render fail.
     "moma_uc_catalog": CONFIG.uc_catalog,
+    "atlas_system_scope_schema": (
+        f"{CONFIG.uc_catalog}.{WORKSPACE_SCOPE_SCHEMA}" if WORKSPACE_SCOPE_ENABLED else ""
+    ),
+    "atlas_workspace_scope": workspace_scope_label(WORKSPACE_SCOPE),
     "certifica_pg_schema": CONFIG.certifica_pg_schema,
     "certifica_llm_endpoint": CONFIG.certifica_llm_endpoint,
     "certifica_sso_enabled": str(CONFIG.certifica_sso_enabled).lower(),
@@ -2768,6 +3054,10 @@ if not sp_id:
 set_app_deployer_acl(CONFIG.app_name, workspace_user)
 grant_tap_privileges(warehouse_id, CONFIG, sp_id)
 grant_system_privileges(warehouse_id, sp_id)
+if WORKSPACE_SCOPE_ENABLED:
+    grant_workspace_scope_privileges(
+        warehouse_id, CONFIG.uc_catalog, WORKSPACE_SCOPE_SCHEMA, sp_id
+    )
 LEGACY_AGENT_MIGRATION = retire_legacy_waf_genie_agent(
     CONFIG.app_name,
     sp_id,
@@ -2812,6 +3102,7 @@ DESTROY_CONFIG = build_destroy_config(
     release_path=APP_RELEASE_PATH,
     release_fingerprint=APP_RELEASE_FINGERPRINT,
     deployment_id=DEPLOYMENT_ID,
+    workspace_scope=WORKSPACE_SCOPE_MANIFEST,
     lakebase_project_created=bool(
         lakebase_project.get("_atlas_created_by_deploy", False)
     ),
@@ -2896,6 +3187,10 @@ _meta = ensure_app(
 )
 grant_tap_privileges(_warehouse_id, CONFIG, _sp_id)
 grant_system_privileges(_warehouse_id, _sp_id)
+_scope_schema = workspace_scope_schema(CONFIG.app_name)
+_scope_comment = scope_schema_comment(_warehouse_id, CONFIG.uc_catalog, _scope_schema)
+if _scope_comment is not None and _scope_comment.startswith(WORKSPACE_SCOPE_MARKER):
+    grant_workspace_scope_privileges(_warehouse_id, CONFIG.uc_catalog, _scope_schema, _sp_id)
 _consent = inspect_deployer_consent(_meta)
 
 print(

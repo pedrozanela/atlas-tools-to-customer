@@ -95,9 +95,9 @@ export function register() {
         );
       }
 
-      // Defensive: refuse to come up if any root table has NULL owner_email
-      // rows. These would be invisible under per-user isolation. The check
-      // is non-fatal when FORGE_USER_ISOLATION=false (escape hatch).
+      // Defensive: repair/report root rows with NULL owner_email (invisible
+      // under per-user isolation). Orphans are logged, not fatal; only an
+      // unexpected failure of the check itself stops the boot.
       try {
         const { assertOwnerEmailIntegrity } = await import("@/lib/lakebase/isolation-guard");
         await assertOwnerEmailIntegrity();

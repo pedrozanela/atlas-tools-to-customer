@@ -534,7 +534,9 @@
       "section_lakehouse": "Pilares específicos do Lakehouse",
       "section_lakehouse_desc": "Como dados e IA são governados, descobertos e consumidos.",
       "section_common": "Pilares comuns",
-      "section_common_desc": "Equivalentes aos frameworks AWS / Azure Well-Architected."
+      "section_common_desc": "Equivalentes aos frameworks AWS / Azure Well-Architected.",
+      "scope_label": "Escopo",
+      "scope_all": "todos os workspaces da account (nesta região)"
     },
     "tabs": {
       "failing": "Falhando ({count})",

@@ -391,6 +391,11 @@ def destroy_plan(config: dict[str, Any]) -> dict[str, Any]:
             else "legacy_app_sp"
         ),
         "workspace_release_root": source["release_root"],
+        "workspace_scope_views": (
+            f"{config['workspace_scope']['catalog']}.{config['workspace_scope']['schema']}"
+            if isinstance(config.get("workspace_scope"), dict)
+            else "none"
+        ),
         "lakebase_project": lakebase["project_name"],
         "lakebase_delete_mode": (
             ("purge" if PURGE_LAKEBASE else "soft_delete_7_day_recovery")
@@ -549,6 +554,18 @@ def stop_app(config: dict[str, Any], result: dict[str, Any]) -> None:
     fail(f"Timed out stopping Databricks App compute: {app_name}")
 
 
+WAF_GENIE_TITLE_SUFFIX = re.compile(r" \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+
+def matches_genie_title(actual: Any, expected: str) -> bool:
+    """The workspace appends a timestamp when the name collides in the folder."""
+    if not isinstance(actual, str):
+        return False
+    return actual == expected or (
+        actual.startswith(expected) and bool(WAF_GENIE_TITLE_SUFFIX.fullmatch(actual[len(expected):]))
+    )
+
+
 def is_safe_genie_id(space_id: Any) -> bool:
     return isinstance(space_id, str) and bool(
         re.fullmatch(
@@ -615,7 +632,7 @@ def delete_genie_agents(config: dict[str, Any], result: dict[str, Any]) -> None:
         candidates.extend(
             space
             for space in page.get("spaces", [])
-            if isinstance(space, dict) and space.get("title") == title
+            if isinstance(space, dict) and matches_genie_title(space.get("title"), title)
         )
         page_token = page.get("next_page_token")
         if not page_token:
@@ -637,7 +654,7 @@ def delete_genie_agents(config: dict[str, Any], result: dict[str, Any]) -> None:
                 already_absent += 1
                 continue
             raise
-        if live.get("title") != title:
+        if not matches_genie_title(live.get("title"), title):
             ignored_non_owned += 1
             continue
         parent_path = live.get("parent_path") or candidate.get("parent_path")
@@ -751,6 +768,26 @@ def delete_unity_catalog(config: dict[str, Any], result: dict[str, Any]) -> None
         result["unity_catalog_table"] = "retained_by_config"
 
     preserved: list[str] = []
+    scope = config.get("workspace_scope")
+    if isinstance(scope, dict):
+        # Workspace-scope views created by deploy_atlas: drop only the objects
+        # listed in the manifest, then the schema when it is empty.
+        scope_schema = (
+            f"{sql_ident(require_string(scope, 'catalog'))}."
+            f"{sql_ident(require_string(scope, 'schema'))}"
+        )
+        for view in scope.get("views") or []:
+            run_sql(warehouse_id, f"DROP VIEW IF EXISTS {scope_schema}.{sql_ident(str(view))}")
+        run_sql(
+            warehouse_id,
+            f"DROP TABLE IF EXISTS {scope_schema}.{sql_ident(require_string(scope, 'table'))}",
+        )
+        try:
+            run_sql(warehouse_id, f"DROP SCHEMA IF EXISTS {scope_schema} RESTRICT")
+            result["workspace_scope_schema"] = "deleted_or_absent"
+        except Exception as exc:
+            preserved.append(f"workspace scope schema retained because it is non-empty: {exc}")
+
     if uc.get("drop_schema_if_empty") is True:
         try:
             run_sql(

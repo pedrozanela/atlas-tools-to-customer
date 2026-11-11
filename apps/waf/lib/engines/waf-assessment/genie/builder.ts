@@ -17,8 +17,22 @@ import type {
   SerializedSpace,
   TextInstruction,
 } from "@/lib/genie/types";
+import { scopeSystemTableNames, scopeSystemTables } from "@/lib/dbx/system-scope";
 
 export const WAF_GENIE_TITLE = "Forge WAF Genie";
+
+/**
+ * The workspace appends " YYYY-MM-DD HH:MM:SS" when another object with the
+ * same name already sits in the parent folder (e.g. two Atlas apps in one
+ * workspace). The description, which carries the app name, is the identity.
+ */
+export function isWafGenieTitle(title: string | null | undefined): boolean {
+  if (!title) return false;
+  return (
+    title === WAF_GENIE_TITLE ||
+    /^Forge WAF Genie \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(title)
+  );
+}
 export const LEGACY_WAF_GENIE_DESCRIPTION =
   "Ask questions about your Databricks workspace in WAF terms — failing controls, jobs without service principals, table comment coverage, CPU/memory utilisation. Backed by system.* tables.";
 
@@ -219,24 +233,30 @@ WHERE table_type IN ('MANAGED', 'EXTERNAL')
  * The Genie API will further sanitise it (`sanitizeSerializedSpace`).
  */
 export function buildWafGenieSpace(locale?: string): SerializedSpace {
+  // Workspace scoping: attach the admin-selected views instead of system.*,
+  // and point instructions/examples at them so the Agent never queries the
+  // unfiltered tables.
   const tables: DataSourceTable[] = TABLES.map((t) => ({
-    identifier: t.identifier,
-    description: [t.description],
+    identifier: scopeSystemTableNames(t.identifier),
+    description: [scopeSystemTableNames(t.description)],
   }));
 
   const textInstructions: TextInstruction[] = [
-    { id: newId(), content: [languageDirective(locale) + TEXT_INSTRUCTION] },
+    {
+      id: newId(),
+      content: [scopeSystemTableNames(languageDirective(locale) + TEXT_INSTRUCTION)],
+    },
   ];
 
   const sampleQuestions: SampleQuestion[] = SAMPLE_QUESTIONS.map((q) => ({
     id: newId(),
-    question: [q],
+    question: [scopeSystemTableNames(q)],
   }));
 
   const exampleSqls: ExampleQuestionSql[] = EXAMPLE_SQLS.map((e) => ({
     id: newId(),
-    question: [e.question],
-    sql: [e.sql],
+    question: [scopeSystemTableNames(e.question)],
+    sql: [scopeSystemTables(e.sql)],
   }));
 
   return {

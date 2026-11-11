@@ -135,6 +135,14 @@ variables:
     description: "Run the idempotent Certifica schema and demo-content seed at startup."
     default: "true"
 
+  atlas_system_scope_schema:
+    description: "<catalog>.<schema> holding the workspace-scoped system-table views. Empty = read system.* (all workspaces). Created by notebooks/deploy_atlas.py."
+    default: ""
+
+  atlas_workspace_scope:
+    description: "Human-readable workspace selection shown in reports. Empty = all workspaces."
+    default: ""
+
   warehouse_id:
     description: "SQL warehouse ID the app SP can use for queries."
     default: "622e7544924eb8c9"

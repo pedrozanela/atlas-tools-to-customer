@@ -9,6 +9,7 @@
 
 import { getConfig, getHeaders } from "./client";
 import { fetchWithTimeout, TIMEOUTS } from "./fetch-with-timeout";
+import { scopeSystemTables } from "./system-scope";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -107,7 +108,8 @@ export async function executeSQL(
 
   const body: Record<string, unknown> = {
     warehouse_id: config.warehouseId,
-    statement: sql,
+    // Workspace scoping: system.* reads go through the admin-selected views.
+    statement: scopeSystemTables(sql),
     wait_timeout: waitTimeout,
     on_wait_timeout: "CONTINUE",
     disposition: "INLINE",

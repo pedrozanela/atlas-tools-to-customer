@@ -284,7 +284,10 @@ export default function WafReportPage() {
         </p>
 
         <div className="mt-8 grid grid-cols-2 gap-x-10 gap-y-5">
-          <KeyValue label="Cliente / Escopo" value={detail.scope || "Workspace inteiro"} />
+          <KeyValue
+            label="Escopo (workspaces)"
+            value={detail.scope || "Todos os workspaces da account (nesta região)"}
+          />
           <KeyValue label="Responsável" value={detail.ownerEmail || "—"} />
           <KeyValue
             label="Data da avaliação"

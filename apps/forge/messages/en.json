@@ -538,7 +538,9 @@
       "complete": "Complete",
       "pending": "{count} pending",
       "answer_pending": "Answer the manual controls in the Qualitative tab.",
-      "all_answered": "All manual controls answered."
+      "all_answered": "All manual controls answered.",
+      "scope_label": "Scope",
+      "scope_all": "all workspaces in the account (this region)"
     },
     "tabs": {
       "failing": "Failing ({count})",

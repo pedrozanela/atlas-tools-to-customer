@@ -18,6 +18,7 @@ import type {
 import { ensureMigrated } from "@/lib/lakebase/schema";
 import { logger } from "@/lib/logger";
 import { withPrisma } from "@/lib/prisma";
+import { scopeSystemTableNames, workspaceScopeLabel } from "@/lib/dbx/system-scope";
 
 const DATABRICKS_WAF_DOCS =
   "https://docs.databricks.com/aws/en/lakehouse-architecture/well-architected";
@@ -89,7 +90,13 @@ const RESPONSE_LANGUAGES: Record<string, string> = {
 export function buildRecommendationPrompt(input: ControlPromptInput): string {
   const docs = documentationUrlsForControl(input);
   const language = RESPONSE_LANGUAGES[input.locale] ?? "English";
-  return `Analyze exactly one Databricks Well-Architected Framework control.
+  const scopeLabel = workspaceScopeLabel();
+  const scopeRule = scopeLabel
+    ? `\n8. Scope: this assessment covers only ${scopeLabel}. The attached tables are already filtered to that selection; query only the attached tables and never the original system.* tables.`
+    : "";
+  // Point every system-table mention (curated docs, metric definitions) at the
+  // scoped views attached to the Agent.
+  return scopeSystemTableNames(`Analyze exactly one Databricks Well-Architected Framework control.
 
 Control: ${input.wafId}
 Pillar: ${input.pillar}
@@ -116,7 +123,7 @@ Mandatory execution contract:
 4. Combine the curated documentation excerpt with the SQL evidence. Never claim an external URL was fetched.
 5. Do not expose secrets, tokens, credentials, or unnecessary personal data. Prefer aggregate evidence; include resource identifiers only when they are required for remediation.
 6. Return concise Markdown with these sections: Finding, Workspace evidence, Recommendations, Priority and next steps.
-7. Respond in ${language}. Keep Databricks object names, SQL identifiers, and WAF control IDs unchanged.`;
+7. Respond in ${language}. Keep Databricks object names, SQL identifiers, and WAF control IDs unchanged.${scopeRule}`);
 }
 
 function parseStringArray(raw: string | null): string[] {

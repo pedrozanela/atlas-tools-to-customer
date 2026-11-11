@@ -538,7 +538,9 @@
       "complete": "Completo",
       "pending": "{count} pendente(s)",
       "answer_pending": "Responda os controles manuais na aba Qualitativo.",
-      "all_answered": "Todos os controles manuais foram respondidos."
+      "all_answered": "Todos os controles manuais foram respondidos.",
+      "scope_label": "Escopo",
+      "scope_all": "todos os workspaces da account (nesta região)"
     },
     "tabs": {
       "failing": "Falhando ({count})",

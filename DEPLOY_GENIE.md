@@ -119,7 +119,8 @@ contexto, então funciona como job. Crie `run.json` (ajuste os valores) e submet
         "certifica_superadmin_emails": "<email-admin>",
         "prebuilt_artifact_url": "/Volumes/<catalogo>/atlas/artifacts/atlas-prebuilt.zip",
         "run_app": "true",
-        "smoke_test": "true"
+        "smoke_test": "false",
+        "workspace_scope": "<id-ou-nome-1>,<id-ou-nome-2>"
       }
     }
   }]
@@ -140,6 +141,7 @@ databricks jobs submit --json @run.json --profile $PROFILE
 | `certifica_superadmin_emails` | Admin do Certifica | e-mail do admin |
 | `prebuilt_artifact_url` | Caminho do Volume (B.1) | `/Volumes/.../atlas-prebuilt.zip` |
 | Lakebase (`lakebase_*`) | Compute do Postgres | padrão: 0.5–1 CU, scale-to-zero 300s |
+| `workspace_scope` | Workspaces que o Atlas analisa (todos os módulos) | IDs ou nomes separados por vírgula; vazio = todos os workspaces da account |
 
 ---
 
@@ -176,3 +178,38 @@ todos os usuários do workspace).
 ## Teardown
 `notebooks/destroy_atlas.py` remove tudo. Roda em `dry_run=true` por padrão — revise o plano
 impresso e só então rode com `dry_run=false` digitando `DESTROY <app-name>`.
+
+## Escopo por workspace
+
+Por padrão o Atlas lê as system tables da account inteira. Para analisar só alguns
+workspaces, preencha o widget `workspace_scope` com IDs (o número do `?o=` na URL)
+ou nomes de workspace, separados por vírgula. O notebook:
+
+1. Resolve cada item em `system.access.workspaces_latest` e para o deploy se um ID ou
+   nome não existir, ou se um nome for ambíguo (aí use o ID). O nome nem sempre é igual
+   ao endereço do workspace; confira o que o notebook imprime.
+2. Cria o schema `<uc_catalog>.<app_name>_system` com a tabela `workspace_scope` (lista
+   para auditoria) e 11 views filtradas: `access_audit`, `access_table_lineage`,
+   `billing_usage`, `compute_clusters`, `compute_node_timeline`,
+   `compute_warehouse_events`, `compute_warehouses`, `lakeflow_job_run_timeline`,
+   `lakeflow_jobs`, `lakeflow_pipelines` e `query_history`. Os IDs ficam gravados na
+   própria view, então apagar linhas da tabela `workspace_scope` não amplia o escopo.
+3. Faz todo o Atlas ler essas views em vez de `system.*`: o WAF (`/waf` e
+   `/forge/assessment`), o Genie Agent de recomendações, o dashboard Lakeview do WAF e o
+   Forge (sugestões de join, linhagem, Metadata Genie).
+4. Concede ao service principal do App `USE SCHEMA` e `SELECT` nesse schema. As views
+   pertencem a quem fez o deploy, que precisa ter `SELECT` nas system tables.
+
+O escopo aparece na tela do WAF, no PDF e numa coluna do CSV.
+
+Limitações:
+- `system.information_schema` (comentários, tags, row filters, DBFS) é por metastore e não
+  tem `workspace_id`; os controles de Governança que dependem dele continuam olhando o
+  metastore inteiro.
+- Eventos de auditoria de nível de account (`workspace_id = 0`) ficam fora quando há escopo.
+- O escopo vale para o que o Atlas lê e mostra; o usuário mantém o próprio acesso às system
+  tables fora do app.
+
+Para mudar o escopo, rode o notebook de novo com a nova lista. Para voltar a analisar a
+account inteira, rode com o widget vazio: as views são removidas e o Atlas volta a ler
+`system.*`. O `destroy_atlas.py` também remove o schema de escopo.
